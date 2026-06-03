@@ -41,6 +41,10 @@
         .mensaje.info { background: #d1ecf1; color: #0c5460; }
         .ocr-raw-box { background: #f9f9f9; border: 1px solid #ccc; padding: 10px; margin: 10px 0; border-radius: 6px; }
         .export-section, .config-box { background: #e8f0fe; padding: 15px; border-radius: 8px; margin-top: 20px; }
+        @media (max-width: 700px) {
+            .tabla-facturas, .tabla-usuarios { font-size: 12px; }
+            button { padding: 6px 10px; font-size: 12px; }
+        }
     </style>
 </head>
 <body>
@@ -84,7 +88,7 @@
         </div>
         <div id="reader"></div>
         <div id="ocrPreview" class="hidden">
-            <img id="imgOCR" src="" alt="Vista previa">
+            <img id="imgOCR" src="" alt="Vista previa" style="max-width:100%">
             <p id="estadoOCR" class="mensaje info">Procesando...</p>
             <div class="ocr-raw-box">
                 <label>Texto reconocido (editá si es necesario):</label>
@@ -117,7 +121,7 @@
 
         <h2>📋 Facturas (<span id="contador">0</span>)</h2>
         <table class="tabla-facturas">
-            <thead><tr><th>RUC</th><th>Proveedor</th><th>Fecha</th><th>Nro.</th><th>Monto</th><th>IVA</th><th>Estado</th><th>Acciones</th></tr></thead>
+            <thead><tr><th>RUC</th><th>Proveedor</th><th>Tipo</th><th>Fecha</th><th>Nro.</th><th>Monto</th><th>IVA</th><th>Estado</th><th>Acciones</th></tr></thead>
             <tbody id="cuerpoTabla"></tbody>
         </table>
 
@@ -148,7 +152,7 @@
         <button id="btnRefrescarAdmin" class="btn-secondary" style="margin-bottom:10px;">🔄 Refrescar lista</button>
         <h2>Usuarios registrados</h2>
         <table class="tabla-usuarios">
-            <thead><tr><th>Email</th><th>Estado</th><th>Rol</th><th>Acciones</th></thead>
+            <thead><tr><th>Email</th><th>Estado</th><th>Rol</th><th>Acciones</th></tr></thead>
             <tbody id="cuerpoUsuarios"></tbody>
         </table>
         <div id="mensajeAdmin" class="mensaje hidden"></div>
@@ -157,7 +161,6 @@
 
 <script>
     // ================== CONFIGURACIÓN FIREBASE ==================
-    // REEMPLAZA ESTOS DATOS CON LOS DE TU PROYECTO FIREBASE
     const firebaseConfig = {
         apiKey: "AIzaSyACS9iWyBikRum2hWCvYd2yiIDqRVf2EFs",
         authDomain: "registro-de-facturas-irp-py.firebaseapp.com",
@@ -202,7 +205,6 @@
         }
     });
 
-    // REGISTRO MEJORADO (CREA DOCUMENTO EN FIRESTORE)
     document.getElementById('btnRegistro').addEventListener('click', async () => {
         const email = document.getElementById('regEmail').value.trim();
         const pass = document.getElementById('regPassword').value;
@@ -246,7 +248,15 @@
         document.getElementById('formLogin').classList.remove('hidden');
     });
 
-    function logout() { auth.signOut(); }
+    async function logout() {
+        // Detener scanner si estaba activo
+        if (scanner) {
+            try { await scanner.stop(); } catch(e) {}
+            scanner = null;
+            document.getElementById('btnDetenerScanner').classList.add('hidden');
+        }
+        await auth.signOut();
+    }
     document.getElementById('btnLogout').addEventListener('click', logout);
     document.getElementById('btnLogoutPendiente').addEventListener('click', logout);
     document.getElementById('btnLogoutAdmin').addEventListener('click', logout);
@@ -271,6 +281,12 @@
             }
         } else {
             if (facturasListener) facturasListener();
+            // Detener scanner si estaba corriendo
+            if (scanner) {
+                try { await scanner.stop(); } catch(e) {}
+                scanner = null;
+                document.getElementById('btnDetenerScanner').classList.add('hidden');
+            }
             mostrarPantalla('pantallaLogin');
             document.getElementById('formLogin').classList.remove('hidden');
             document.getElementById('formRegistro').classList.add('hidden');
@@ -366,9 +382,19 @@
             const tr = document.createElement('tr');
             const estadoIcono = f.imputada ? '✅' : '⏳';
             const estadoTexto = f.imputada ? 'Imputada' : 'Pendiente';
+            let tipoTexto = '';
+            switch(f.tipoComprobante) {
+                case '1': tipoTexto = 'Factura'; break;
+                case '2': tipoTexto = 'Recibo'; break;
+                case '3': tipoTexto = 'Autofactura'; break;
+                case '4': tipoTexto = 'Nota crédito'; break;
+                case '5': tipoTexto = 'Nota débito'; break;
+                default: tipoTexto = f.tipoComprobante;
+            }
             tr.innerHTML = `
                 <td>${f.ruc || ''}</td>
                 <td>${f.nombre || ''}</td>
+                <td>${tipoTexto}</td>
                 <td>${f.fecha || ''}</td>
                 <td>${f.numeroComprobante || ''}</td>
                 <td>${parseFloat(f.montoTotal || 0).toLocaleString('es-PY')}</td>
@@ -378,7 +404,7 @@
                     <button class="btn-edit" onclick="editarFactura('${f.id}')">✏️</button>
                     <button class="btn-danger" onclick="eliminarFactura('${f.id}')">🗑️</button>
                     <button class="${f.imputada ? 'btn-pendiente' : 'btn-imputada'}" onclick="toggleImputada('${f.id}')">${f.imputada ? 'Desmarcar' : 'Marcar imputada'}</button>
-                 </td>
+                  </td>
             `;
             tbody.appendChild(tr);
         });
@@ -421,6 +447,15 @@
         }
     };
 
+    function validarDuplicado(data, docIdEdicion) {
+        return facturas.some(f => 
+            f.id !== docIdEdicion && 
+            f.ruc === data.ruc && 
+            f.timbrado === data.timbrado && 
+            f.numeroComprobante === data.numeroComprobante
+        );
+    }
+
     async function guardarFactura() {
         const facturaData = {
             ruc: document.getElementById('ruc').value.trim(),
@@ -435,6 +470,19 @@
             imputada: false
         };
         const docId = document.getElementById('docIdEdicion').value;
+        
+        // Validar campos obligatorios
+        if (!facturaData.ruc || !facturaData.nombre || !facturaData.fecha || !facturaData.timbrado || !facturaData.numeroComprobante || isNaN(facturaData.montoTotal)) {
+            mostrarMensaje('', 'Completá todos los campos obligatorios.', 'error');
+            return;
+        }
+        
+        // Validar duplicado
+        if (validarDuplicado(facturaData, docId)) {
+            mostrarMensaje('', 'Ya existe una factura con el mismo RUC, timbrado y número.', 'error');
+            return;
+        }
+
         try {
             if (docId) {
                 await db.collection('facturas').doc(docId).update(facturaData);
@@ -445,7 +493,7 @@
             }
             limpiarFormulario();
         } catch (e) {
-            mostrarMensaje('', 'Error: ' + e.message, 'error');
+            mostrarMensaje('', 'Error: ' + (e.message || 'permisos insuficientes'), 'error');
         }
     }
 
@@ -454,6 +502,8 @@
         document.getElementById('docIdEdicion').value = '';
         document.getElementById('btnCancelarEdicion').classList.add('hidden');
         document.getElementById('modoFormulario').innerText = 'Agregar';
+        // Opcional: cerrar preview OCR si estaba abierto
+        document.getElementById('ocrPreview').classList.add('hidden');
     }
 
     document.getElementById('btnGuardar').addEventListener('click', guardarFactura);
@@ -461,80 +511,83 @@
     document.getElementById('btnNuevaFactura').addEventListener('click', limpiarFormulario);
 
     // ================== QR (con soporte avanzado para SET) ==================
-    function iniciarScanner() {
-        if (!scanner) scanner = new Html5Qrcode("reader");
-        scanner.start({ facingMode: "environment" }, { fps: 10, qrbox: 250 }, onScanSuccess, onScanFailure);
-        document.getElementById('btnDetenerScanner').classList.remove('hidden');
+    async function iniciarScanner() {
+        if (scanner) {
+            try { await scanner.stop(); } catch(e) {}
+            scanner = null;
+        }
+        scanner = new Html5Qrcode("reader");
+        try {
+            await scanner.start({ facingMode: "environment" }, { fps: 10, qrbox: 250 }, onScanSuccess, onScanFailure);
+            document.getElementById('btnDetenerScanner').classList.remove('hidden');
+        } catch(e) {
+            console.error("Error al iniciar cámara:", e);
+            alert("No se pudo acceder a la cámara. Verificá permisos.");
+        }
     }
-    function detenerScanner() {
-        if (scanner) scanner.stop();
+    
+    async function detenerScanner() {
+        if (scanner) {
+            try { await scanner.stop(); } catch(e) {}
+            scanner = null;
+        }
         document.getElementById('btnDetenerScanner').classList.add('hidden');
     }
 
-    function onScanSuccess(decodedText) {
-        console.log("QR escaneado:", decodedText);
-        
-        // Función para decodificar base64 de forma robusta
-        function decodeBase64(str) {
+    function decodeBase64(str) {
+        try {
+            let base64 = str.replace(/-/g, '+').replace(/_/g, '/');
+            let decoded = atob(base64);
             try {
-                // Reemplazar caracteres no estándar de URL-safe base64
-                let base64 = str.replace(/-/g, '+').replace(/_/g, '/');
-                // Decodificar
-                let decoded = atob(base64);
-                // Intentar convertir caracteres especiales
-                try {
-                    decoded = decodeURIComponent(escape(decoded));
-                } catch(e) {}
-                return decoded;
-            } catch(e) {
-                return null;
-            }
+                decoded = decodeURIComponent(escape(decoded));
+            } catch(e) {}
+            return decoded;
+        } catch(e) {
+            return null;
         }
+    }
 
-        // Si es URL de Ekuatia (factura electrónica paraguaya)
+    async function onScanSuccess(decodedText) {
+        console.log("QR escaneado:", decodedText);
+        await detenerScanner(); // Detenemos después del primer QR exitoso
+
+        // Procesar QR de SET (Ekuatia)
         if (decodedText.includes('ekuatia.set.gov.py')) {
             try {
                 const url = new URL(decodedText);
-                // Buscar parámetros posibles (p, d, data, q, etc.)
-                let dataParam = url.searchParams.get('p') || url.searchParams.get('d') || url.searchParams.get('data') || url.searchParams.get('q');
+                let dataParam = null;
+                for (let [key, value] of url.searchParams.entries()) {
+                    if (value && value.length > 30 && /^[A-Za-z0-9\-_=]+$/.test(value)) {
+                        dataParam = value;
+                        break;
+                    }
+                }
                 if (!dataParam) {
                     alert('El QR no contiene parámetro de datos. URL: ' + decodedText);
-                    detenerScanner();
                     return;
                 }
                 
                 let jsonStr = decodeBase64(dataParam);
                 if (!jsonStr) {
-                    alert('No se pudo decodificar el base64. Parámetro: ' + dataParam);
-                    detenerScanner();
+                    alert('No se pudo decodificar el base64.');
                     return;
                 }
                 
-                // Intentar parsear JSON (puede venir con padding o caracteres extra)
                 let factura;
                 try {
                     factura = JSON.parse(jsonStr);
                 } catch(e) {
-                    // Si falla, limpiar caracteres no imprimibles
                     let cleaned = jsonStr.replace(/[\x00-\x1F\x7F]/g, '');
-                    try {
-                        factura = JSON.parse(cleaned);
-                    } catch(e2) {
-                        alert('El texto decodificado no es un JSON válido. Primeros 200 caracteres:\n' + jsonStr.substring(0,200));
-                        detenerScanner();
-                        return;
-                    }
+                    factura = JSON.parse(cleaned);
                 }
                 
-                // Mapeo flexible de campos
                 const d = {};
-                d.ruc = factura.ruc_proveedor || factura.ruc || factura.RUC || factura.rucProveedor || factura.nro_documento_proveedor;
-                d.nombre = factura.razon_social_proveedor || factura.razonSocial || factura.nombre || factura.Nombre || factura.proveedor_denominacion;
+                d.ruc = factura.ruc_proveedor || factura.ruc || factura.RUC || factura.rucProveedor;
+                d.nombre = factura.razon_social_proveedor || factura.razonSocial || factura.nombre || factura.Nombre;
                 d.timbrado = factura.timbrado || factura.Timbrado;
                 d.numeroComprobante = factura.numero_comprobante || factura.nro_comprobante || factura.numero || factura.Numero || factura.nroFactura;
                 d.fecha = factura.fecha_emision || factura.fechaEmision || factura.fecha || factura.Fecha;
-                d.montoTotal = factura.monto_total || factura.totalComprobante || factura.total || factura.monto || factura.monto_neto;
-                // IVA: puede venir como porcentaje o montos separados
+                d.montoTotal = factura.monto_total || factura.totalComprobante || factura.total || factura.monto;
                 if (factura.iva_porcentaje !== undefined) d.tipoIVA = String(factura.iva_porcentaje);
                 else if (factura.iva === 10 || factura.iva === '10') d.tipoIVA = '10';
                 else if (factura.iva === 5 || factura.iva === '5') d.tipoIVA = '5';
@@ -543,27 +596,21 @@
                 else if (factura.monto_iva_5 && factura.monto_iva_5 > 0) d.tipoIVA = '5';
                 else d.tipoIVA = '0';
                 
-                // Validar campos mínimos
                 if (!d.ruc || !d.montoTotal) {
-                    alert('No se pudieron extraer campos obligatorios (RUC o monto). Revisá la estructura en la consola.');
-                    console.log('Datos extraídos:', d);
-                    console.log('Factura original:', factura);
-                    detenerScanner();
+                    alert('No se pudieron extraer campos obligatorios (RUC o monto). Revisá consola.');
+                    console.log('Datos:', d, factura);
                     return;
                 }
-                
                 rellenarFormulario(d);
-                detenerScanner();
                 return;
             } catch (e) {
-                console.error('Error procesando QR de SET:', e);
-                alert('Error al procesar el QR: ' + e.message);
-                detenerScanner();
+                console.error(e);
+                alert('Error al procesar QR del SET: ' + e.message);
                 return;
             }
         }
         
-        // Si no es URL de SET, intentar como JSON directo
+        // Si no es SET, intentar como JSON directo
         try {
             const json = JSON.parse(decodedText);
             const d = {};
@@ -575,23 +622,39 @@
             d.nombre = json.nombre || json.Nombre || json.razonSocial;
             d.tipoIVA = json.iva || json.IVA;
             rellenarFormulario(d);
-            detenerScanner();
         } catch(e) {
-            alert('Formato de QR no reconocido. El texto escaneado es:\n' + decodedText.substring(0, 150));
-            detenerScanner();
+            alert('Formato de QR no reconocido. Texto:\n' + decodedText.substring(0, 150));
         }
     }
 
-    function onScanFailure(err) { console.warn(err); }
+    function onScanFailure(err) { 
+        // No mostrar errores de lectura para no molestar
+        // console.warn(err); 
+    }
 
     function rellenarFormulario(d) {
         if (d.ruc) document.getElementById('ruc').value = d.ruc;
         if (d.nombre) document.getElementById('nombre').value = d.nombre;
         if (d.timbrado) document.getElementById('timbrado').value = d.timbrado;
         if (d.numeroComprobante) document.getElementById('numeroComprobante').value = d.numeroComprobante;
-        if (d.fecha) document.getElementById('fecha').value = d.fecha;
+        if (d.fecha) {
+            let fecha = d.fecha;
+            if (fecha.includes('/')) {
+                let partes = fecha.split('/');
+                if (partes.length === 3) fecha = `${partes[2]}-${partes[1]}-${partes[0]}`;
+            }
+            document.getElementById('fecha').value = fecha;
+        }
         if (d.montoTotal) document.getElementById('montoTotal').value = d.montoTotal;
         if (d.tipoIVA) document.getElementById('tipoIVA').value = d.tipoIVA;
+        if (d.tipoComprobante) document.getElementById('tipoComprobante').value = d.tipoComprobante;
+        if (d.condicionCompra) document.getElementById('condicionCompra').value = d.condicionCompra;
+        // Cancelar edición si estábamos editando
+        limpiarFormulario(); // limpia el modo edición pero mantiene los valores que acabamos de poner? No, mejor no llamar limpiarFormulario porque resetea.
+        // Solo aseguramos que no haya edición pendiente
+        document.getElementById('docIdEdicion').value = '';
+        document.getElementById('btnCancelarEdicion').classList.add('hidden');
+        document.getElementById('modoFormulario').innerText = 'Agregar';
     }
 
     document.getElementById('btnIniciarScanner').addEventListener('click', iniciarScanner);
@@ -617,29 +680,50 @@
             logger: m => { if (m.status === 'recognizing text') document.getElementById('estadoOCR').textContent = `OCR: ${Math.round(m.progress * 100)}%`; }
         });
         document.getElementById('textoOCR').value = text;
-        rellenarFormulario(extraerDatosFactura(text));
+        const datosExtraidos = extraerDatosFactura(text);
+        rellenarFormulario(datosExtraidos);
     });
+    
     function extraerDatosFactura(texto) {
         const d = {};
         const txt = texto.replace(/\s+/g, ' ').trim();
+        // RUC
         const rucMatch = txt.match(/(\d{6,8}-\d)/);
         if (rucMatch) d.ruc = rucMatch[1];
+        // Timbrado
         const timbMatch = txt.match(/(?:Timbrado|TIMBRADO)[^\d]*(\d{8})/i) || txt.match(/\b(\d{8})\b/);
         if (timbMatch) d.timbrado = timbMatch[1];
+        // Número comprobante
         const nroMatch = txt.match(/(\d{3,4}-\d{3,4}-\d{4,10})/);
         if (nroMatch) d.numeroComprobante = nroMatch[1];
+        // Fecha
         const fechaMatch = txt.match(/(\d{2}\/\d{2}\/\d{4})/);
         if (fechaMatch) { const [dia, mes, anio] = fechaMatch[1].split('/'); d.fecha = `${anio}-${mes}-${dia}`; }
+        // Monto total
         const montoMatch = txt.match(/(?:TOTAL|Total)\s*:?\s*(?:Gs\.?|\u20B2)?\s*([\d]{1,3}(?:\.[\d]{3})*(?:,\d{2})?)/i);
         if (montoMatch) d.montoTotal = parseFloat(montoMatch[1].replace(/\./g, '').replace(',', '.'));
+        // Tipo IVA
         if (/10\s*%/.test(txt)) d.tipoIVA = '10';
         else if (/5\s*%/.test(txt)) d.tipoIVA = '5';
         else if (/exento/i.test(txt)) d.tipoIVA = '0';
+        // Tipo comprobante
+        if (/nota de crédito/i.test(txt)) d.tipoComprobante = '4';
+        else if (/nota de débito/i.test(txt)) d.tipoComprobante = '5';
+        else if (/recibo/i.test(txt)) d.tipoComprobante = '2';
+        else if (/autofactura/i.test(txt)) d.tipoComprobante = '3';
+        else d.tipoComprobante = '1';
+        // Condición compra
+        if (/crédito/i.test(txt)) d.condicionCompra = '02';
+        else d.condicionCompra = '01';
         return d;
     }
+    
     document.getElementById('btnReextraer').addEventListener('click', () => {
         const texto = document.getElementById('textoOCR').value;
-        if (texto.trim()) rellenarFormulario(extraerDatosFactura(texto));
+        if (texto.trim()) {
+            const datos = extraerDatosFactura(texto);
+            rellenarFormulario(datos);
+        }
     });
 
     // ================== EXPORTACIÓN ZIP ==================
@@ -647,7 +731,11 @@
         const incluir = document.getElementById('incluirImputadas').checked;
         const lista = incluir ? facturas : facturas.filter(f => !f.imputada);
         if (lista.length === 0) { alert('No hay facturas para exportar.'); return; }
-        const miRUC = document.getElementById('miRUC').value.trim();
+        let miRUC = document.getElementById('miRUC').value.trim();
+        if (miRUC.includes('-')) {
+            alert('Usá el RUC sin dígito verificador (solo números)');
+            return;
+        }
         const periodo = document.getElementById('periodo').value.trim();
         const version = document.getElementById('versionID').value.trim();
         if (!miRUC || !periodo || !version) { alert('RUC, periodo y versión requeridos'); return; }
