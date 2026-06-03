@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Facturas IRP - App Multiusuario</title>
+    <!-- Firebase -->
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+    <!-- Librerías QR, ZIP, OCR -->
+    <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+    <style>
+        * { box-sizing: border-box; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        body { margin: 0; padding: 15px; background: #f0f4f8; color: #333; }
+        .container { max-width: 900px; margin: 0 auto; background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+        h1, h2, h3 { color: #1e3a5f; }
+        button { background: #1e3a5f; color: white; border: none; padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: 15px; margin: 3px; }
+        button:disabled { background: #ccc; cursor: not-allowed; }
+        .btn-danger { background: #c62828; }
+        .btn-success { background: #2e7d32; }
+        .btn-ocr { background: #e65100; }
+        .btn-secondary { background: #546e7a; }
+        .btn-edit { background: #ff8f00; }
+        .btn-imputada { background: #6a1b9a; }
+        .btn-pendiente { background: #bdbdbd; color: #333; }
+        .form-group { margin-bottom: 12px; }
+        label { display: block; font-weight: bold; margin-bottom: 4px; }
+        input, select, textarea { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 6px; font-size: 16px; }
+        .tabla-facturas, .tabla-usuarios { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        .tabla-facturas th, .tabla-usuarios th { background: #1e3a5f; color: white; padding: 8px; text-align: left; }
+        .tabla-facturas td, .tabla-usuarios td { padding: 6px; border-bottom: 1px solid #ddd; font-size: 14px; }
+        .tabla-facturas tr:hover, .tabla-usuarios tr:hover { background: #f5f5f5; }
+        .acciones { display: flex; gap: 10px; flex-wrap: wrap; }
+        .hidden { display: none; }
+        .mensaje { padding: 10px; border-radius: 6px; margin: 10px 0; }
+        .mensaje.exito { background: #d4edda; color: #155724; }
+        .mensaje.error { background: #f8d7da; color: #721c24; }
+        .mensaje.info { background: #d1ecf1; color: #0c5460; }
+        .ocr-raw-box { background: #f9f9f9; border: 1px solid #ccc; padding: 10px; margin: 10px 0; border-radius: 6px; }
+        .export-section, .config-box, .backup-box { background: #e8f0fe; padding: 15px; border-radius: 8px; margin-top: 20px; }
+    </style>
+</head>
+<body>
+<div class="container" id="app">
+    <!-- PANTALLA DE LOGIN/REGISTRO (pública) -->
+    <div id="pantallaLogin" class="hidden">
+        <h1>🧾 Facturas IRP</h1>
+        <div id="formLogin">
+            <h2>Iniciar sesión</h2>
+            <div class="form-group"><input type="email" id="loginEmail" placeholder="Correo electrónico" required></div>
+            <div class="form-group"><input type="password" id="loginPassword" placeholder="Contraseña" required></div>
+            <button id="btnLogin">Ingresar</button>
+            <p>¿No tenés cuenta? <a href="#" id="linkRegistro">Registrate acá</a></p>
+        </div>
+        <div id="formRegistro" class="hidden">
+            <h2>Crear cuenta</h2>
+            <div class="form-group"><input type="email" id="regEmail" placeholder="Correo electrónico" required></div>
+            <div class="form-group"><input type="password" id="regPassword" placeholder="Contraseña (mín. 6 caracteres)" required></div>
+            <button id="btnRegistro">Registrarme</button>
+            <p>¿Ya tenés cuenta? <a href="#" id="linkLogin">Iniciar sesión</a></p>
+        </div>
+        <div id="mensajeLogin" class="mensaje hidden"></div>
+    </div>
+
+    <!-- PANTALLA USUARIO PENDIENTE (esperando aprobación) -->
+    <div id="pantallaPendiente" class="hidden">
+        <h2>⏳ Cuenta pendiente de aprobación</h2>
+        <p>Tu cuenta fue creada, pero necesitás que el administrador la apruebe. Te avisaremos cuando esté activa.</p>
+        <button id="btnLogoutPendiente">Cerrar sesión</button>
+    </div>
+
+    <!-- PANTALLA PRINCIPAL DE FACTURAS (usuario aprobado) -->
+    <div id="pantallaFacturas" class="hidden">
+        <h1>🧾 Mis Facturas IRP</h1>
+        <button id="btnLogout" style="float:right;">Cerrar sesión</button>
+        <div class="acciones">
+            <button id="btnIniciarScanner">📷 Escanear QR</button>
+            <button id="btnDetenerScanner" class="hidden">⏹️ Detener QR</button>
+            <button id="btnAbrirOCR" class="btn-ocr">📸 Escanear factura (OCR)</button>
+            <button id="btnNuevaFactura" class="btn-secondary">📝 Nueva manual</button>
+        </div>
+        <div id="reader"></div>
+        <div id="ocrPreview" class="hidden">
+            <img id="imgOCR" src="" alt="Vista previa">
+            <p id="estadoOCR" class="mensaje info">Procesando...</p>
+            <div class="ocr-raw-box">
+                <label>Texto reconocido (editá si es necesario):</label>
+                <textarea id="textoOCR" rows="4"></textarea>
+                <button id="btnReextraer" class="btn-secondary">Re-extraer datos</button>
+            </div>
+        </div>
+
+        <h2>📄 <span id="modoFormulario">Agregar</span> factura</h2>
+        <form id="formFactura">
+            <input type="hidden" id="indiceEdicion" value="-1">
+            <input type="hidden" id="docIdEdicion" value="">
+            <div class="form-group"><label>RUC proveedor *</label><input type="text" id="ruc" required></div>
+            <div class="form-group"><label>Nombre o razón social *</label><input type="text" id="nombre" required></div>
+            <div class="form-group"><label>Tipo de comprobante *</label>
+                <select id="tipoComprobante"><option value="1">Factura</option><option value="2">Recibo</option><option value="3">Autofactura</option><option value="4">Nota de crédito</option><option value="5">Nota de débito</option></select>
+            </div>
+            <div class="form-group"><label>Fecha de emisión *</label><input type="date" id="fecha" required></div>
+            <div class="form-group"><label>Número de timbrado *</label><input type="text" id="timbrado" required></div>
+            <div class="form-group"><label>Número del comprobante *</label><input type="text" id="numeroComprobante" required></div>
+            <div class="form-group"><label>Monto total *</label><input type="number" id="montoTotal" step="0.01" required></div>
+            <div class="form-group"><label>Tipo de IVA *</label>
+                <select id="tipoIVA"><option value="10">10%</option><option value="5">5%</option><option value="0">Exento</option></select>
+            </div>
+            <div class="form-group"><label>Condición de compra</label>
+                <select id="condicionCompra"><option value="01">Contado</option><option value="02">Crédito</option></select>
+            </div>
+            <button type="button" id="btnGuardar">💾 Guardar</button>
+            <button type="button" id="btnCancelarEdicion" class="hidden btn-secondary">❌ Cancelar</button>
+            <button type="button" id="btnLimpiar">🧹 Limpiar</button>
+        </form>
+
+        <h2>📋 Facturas (<span id="contador">0</span>)</h2>
+        <table class="tabla-facturas">
+            <thead><tr><th>RUC</th><th>Proveedor</th><th>Fecha</th><th>Nro.</th><th>Monto</th><th>IVA</th><th>Estado</th><th>Acciones</th></tr></thead>
+            <tbody id="cuerpoTabla"></tbody>
+        </table>
+
+        <div class="config-box">
+            <h3>⚙️ Códigos fijos para exportación</h3>
+            <label>Tipo registro <input type="text" id="cfgTipoRegistro" value="1" size="3"></label>
+            <label>Tipo ident. <input type="text" id="cfgTipoIdentificacion" value="1" size="3"></label>
+            <label>Imputa IVA <input type="text" id="cfgImputaIVA" value="0" size="3"></label>
+            <label>Imputa IRE <input type="text" id="cfgImputaIRE" value="0" size="3"></label>
+            <label>Imputa IRP <input type="text" id="cfgImputaIRP" value="1" size="3"></label>
+            <label>No imputa <input type="text" id="cfgNoImputa" value="0" size="3"></label>
+        </div>
+
+        <div class="export-section">
+            <h2>📤 Exportar ZIP para Marangatu</h2>
+            <label>Tu RUC sin DV <input type="text" id="miRUC"></label>
+            <label>Periodo (AAAAMM) <input type="text" id="periodo" value="202606"></label>
+            <label>Versión <input type="text" id="versionID" value="1"></label>
+            <label><input type="checkbox" id="incluirImputadas"> Incluir facturas ya imputadas</label>
+            <button id="btnExportar" class="btn-success">📦 Generar y descargar ZIP</button>
+        </div>
+    </div>
+
+    <!-- PANTALLA ADMINISTRADOR -->
+    <div id="pantallaAdmin" class="hidden">
+        <h1>🛡️ Panel de Administrador</h1>
+        <button id="btnLogoutAdmin" style="float:right;">Cerrar sesión</button>
+        <h2>Usuarios registrados</h2>
+        <table class="tabla-usuarios">
+            <thead><tr><th>Email</th><th>Estado</th><th>Acciones</th></tr></thead>
+            <tbody id="cuerpoUsuarios"></tbody>
+        </table>
+        <div id="mensajeAdmin" class="mensaje hidden"></div>
+    </div>
+</div>
+
+<script>
+    // ====================== CONFIGURACIÓN FIREBASE ======================
+    const firebaseConfig = {
+        apiKey: "AIzaSyACS9iWyBikRum2hWCvYd2yiIDqRVf2EFs",
+        authDomain: "registro-de-facturas-irp-py.firebaseapp.com",
+        projectId: "registro-de-facturas-irp-py",
+        storageBucket: "registro-de-facturas-irp-py.firebasestorage.app",
+        messagingSenderId: "229558838653",
+        appId: "1:229558838653:web:6460c52bdc517528a31814"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const auth = firebase.auth();
+    const db = firebase.firestore();
+
+    const ADMIN_EMAIL = 'waroiapy@gmail.com';
+    let usuarioActual = null;
+    let facturas = []; // caché local de facturas del usuario actual
+    let facturasListener = null; // para desuscribirse al cerrar sesión
+
+    // ====================== UI: cambio de pantallas ======================
+    function mostrarPantalla(id) {
+        document.querySelectorAll('#pantallaLogin, #pantallaPendiente, #pantallaFacturas, #pantallaAdmin')
+            .forEach(el => el.classList.add('hidden'));
+        document.getElementById(id).classList.remove('hidden');
+    }
+
+    // ====================== AUTENTICACIÓN ======================
+    // Login
+    document.getElementById('btnLogin').addEventListener('click', async () => {
+        const email = document.getElementById('loginEmail').value.trim();
+        const pass = document.getElementById('loginPassword').value;
+        try {
+            await auth.signInWithEmailAndPassword(email, pass);
+        } catch (e) {
+            mostrarMensaje('mensajeLogin', 'Error: ' + e.message, 'error');
+        }
+    });
+
+    // Registro
+    document.getElementById('btnRegistro').addEventListener('click', async () => {
+        const email = document.getElementById('regEmail').value.trim();
+        const pass = document.getElementById('regPassword').value;
+        if (pass.length < 6) {
+            mostrarMensaje('mensajeLogin', 'La contraseña debe tener al menos 6 caracteres.', 'error');
+            return;
+        }
+        try {
+            const cred = await auth.createUserWithEmailAndPassword(email, pass);
+            // Crear documento en "usuarios" con estado pendiente
+            await db.collection('usuarios').doc(cred.user.uid).set({
+                email: email,
+                estado: 'pendiente',
+                fechaRegistro: firebase.firestore.FieldValue.serverTimestamp()
+            });
+            mostrarMensaje('mensajeLogin', 'Cuenta creada. Esperá la aprobación del administrador.', 'info');
+            await auth.signOut();
+        } catch (e) {
+            mostrarMensaje('mensajeLogin', 'Error: ' + e.message, 'error');
+        }
+    });
+
+    // Links entre formularios
+    document.getElementById('linkRegistro').addEventListener('click', (e) => {
+        e.preventDefault();
+        document.getElementById('formLogin').classList.add('hidden');
+        document.getElementById('formRegistro').classList.remove('hidden');
+        document.getElementById('mensajeLogin').classList.add('hidden');
+    });
+    document.getElementById('linkLogin').addEventListener('click', (e) => {
+        e.preventDefault();
+        document.getElementById('formRegistro').classList.add('hidden');
+        document.getElementById('formLogin').classList.remove('hidden');
+        document.getElementById('mensajeLogin').classList.add('hidden');
+    });
+
+    // Observador de estado de autenticación
+    auth.onAuthStateChanged(async (user) => {
+        usuarioActual = user;
+        if (user) {
+            if (user.email === ADMIN_EMAIL) {
+                // Admin
+                mostrarPantalla('pantallaAdmin');
+                cargarPanelAdmin();
+            } else {
+                // Verificar estado en Firestore
+                const doc = await db.collection('usuarios').doc(user.uid).get();
+                if (!doc.exists || doc.data().estado !== 'activo') {
+                    mostrarPantalla('pantallaPendiente');
+                } else {
+                    mostrarPantalla('pantallaFacturas');
+                    cargarFacturasFirestore();
+                }
+            }
+        } else {
+            // No autenticado
+            if (facturasListener) facturasListener();
+            mostrarPantalla('pantallaLogin');
+            document.getElementById('formLogin').classList.remove('hidden');
+            document.getElementById('formRegistro').classList.add('hidden');
+        }
+    });
+
+    // Cerrar sesión
+    function logout() {
+        auth.signOut();
+    }
+    document.getElementById('btnLogout').addEventListener('click', logout);
+    document.getElementById('btnLogoutPendiente').addEventListener('click', logout);
+    document.getElementById('btnLogoutAdmin').addEventListener('click', logout);
+
+    // ====================== FUNCIONES COMUNES ======================
+    function mostrarMensaje(elementoId, texto, tipo) {
+        const el = document.getElementById(elementoId);
+        if (!el) return;
+        el.textContent = texto;
+        el.className = `mensaje ${tipo}`;
+        el.classList.remove('hidden');
+        setTimeout(() => el.classList.add('hidden'), 4000);
+    }
+
+    // ====================== PANEL ADMINISTRADOR ======================
+    async function cargarPanelAdmin() {
+        const tbody = document.getElementById('cuerpoUsuarios');
+        tbody.innerHTML = '';
+        try {
+            const snapshot = await db.collection('usuarios').orderBy('email').get();
+            snapshot.forEach(doc => {
+                const data = doc.data();
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td>${data.email}</td>
+                    <td>${data.estado}</td>
+                    <td>
+                        ${data.estado !== 'activo' ? `<button class="btn-success" onclick="cambiarEstadoUsuario('${doc.id}', 'activo')">Aprobar</button>` : ''}
+                        ${data.estado === 'activo' ? `<button class="btn-danger" onclick="cambiarEstadoUsuario('${doc.id}', 'suspendido')">Suspender</button>` : ''}
+                        ${data.estado === 'suspendido' ? `<button class="btn-success" onclick="cambiarEstadoUsuario('${doc.id}', 'activo')">Reactivar</button>` : ''}
+                        <button class="btn-danger" onclick="eliminarUsuario('${doc.id}')">🗑️ Eliminar</button>
+                    </td>`;
+                tbody.appendChild(tr);
+            });
+        } catch (e) {
+            mostrarMensaje('mensajeAdmin', 'Error al cargar usuarios: ' + e.message, 'error');
+        }
+    }
+
+    window.cambiarEstadoUsuario = async (uid, nuevoEstado) => {
+        try {
+            await db.collection('usuarios').doc(uid).update({ estado: nuevoEstado });
+            mostrarMensaje('mensajeAdmin', `Usuario actualizado a ${nuevoEstado}.`, 'exito');
+            cargarPanelAdmin();
+        } catch (e) {
+            mostrarMensaje('mensajeAdmin', 'Error: ' + e.message, 'error');
+        }
+    };
+
+    window.eliminarUsuario = async (uid) => {
+        if (!confirm('¿Eliminar este usuario? Se borrará su registro en Firestore (no su cuenta de Auth).')) return;
+        try {
+            await db.collection('usuarios').doc(uid).delete();
+            // También eliminar sus facturas
+            const facturasSnapshot = await db.collection('facturas').where('uid', '==', uid).get();
+            const batch = db.batch();
+            facturasSnapshot.forEach(doc => batch.delete(doc.ref));
+            await batch.commit();
+            mostrarMensaje('mensajeAdmin', 'Usuario y sus facturas eliminados.', 'exito');
+            cargarPanelAdmin();
+        } catch (e) {
+            mostrarMensaje('mensajeAdmin', 'Error: ' + e.message, 'error');
+        }
+    };
+
+    // ====================== PANEL DE FACTURAS (USUARIO) ======================
+    // Cargar facturas desde Firestore y mantener listener en tiempo real
+    function cargarFacturasFirestore() {
+        if (facturasListener) facturasListener();
+        facturasListener = db.collection('facturas')
+            .where('uid', '==', usuarioActual.uid)
+            .orderBy('fecha', 'desc')
+            .onSnapshot((snapshot) => {
+                facturas = [];
+                snapshot.forEach(doc => {
+                    facturas.push({ id: doc.id, ...doc.data() });
+                });
+                actualizarTablaFacturas();
+            }, (error) => {
+                console.error(error);
+                mostrarMensaje('', 'Error al cargar facturas. ' + error.message, 'error');
+            });
+    }
+
+    function actualizarTablaFacturas() {
+        const tbody = document.getElementById('cuerpoTabla');
+        const contador = document.getElementById('contador');
+        tbody.innerHTML = '';
+        facturas.forEach((f, index) => {
+            const tr = document.createElement('tr');
+            const estadoIcono = f.imputada ? '✅' : '⏳';
+            const estadoTexto = f.imputada ? 'Imputada' : 'Pendiente';
+            tr.innerHTML = `
+                <td>${f.ruc||''}</td><td>${f.nombre||''}</td><td>${f.fecha||''}</td>
+                <td>${f.numeroComprobante||''}</td><td>${parseFloat(f.montoTotal||0).toLocaleString('es-PY')}</td>
+                <td>${f.tipoIVA==='10'?'10%':f.tipoIVA==='5'?'5%':'Exento'}</td>
+                <td>${estadoIcono} ${estadoTexto}</td>
+                <td>
+                    <button class="btn-edit" onclick="editarFactura('${f.id}')">✏️</button>
+                    <button class="btn-danger" onclick="eliminarFactura('${f.id}')">🗑️</button>
+                    <button class="${f.imputada?'btn-pendiente':'btn-imputada'}" onclick="toggleImputada('${f.id}')">${f.imputada?'Desmarcar':'Marcar imputada'}</button>
+                </td>`;
+            tbody.appendChild(tr);
+        });
+        contador.textContent = facturas.length;
+    }
+
+    // Operaciones CRUD con Firestore
+    async function guardarFacturaFirestore(factura) {
+        try {
+            const indice = document.getElementById('indiceEdicion').value;
+            if (indice !== '-1') {
+                const docId = document.getElementById('docIdEdicion').value;
+                await db.collection('facturas').doc(docId).update(factura);
+                mostrarMensaje('', 'Factura actualizada.', 'exito');
+            } else {
+                await db.collection('facturas').add({ ...factura, uid: usuarioActual.uid });
+                mostrarMensaje('', 'Factura agregada.', 'exito');
+            }
+            cancelarEdicion();
+        } catch (e) {
+            mostrarMensaje('', 'Error: ' + e.message, 'error');
+        }
+    }
+
+    window.editarFactura = (docId) => {
+        const f = facturas.find(f => f.id === docId);
+        if (!f) return;
+        document.getElementById('ruc').value = f.ruc || '';
+        document.getElementById('nombre').value = f.nombre || '';
+        document.getElementById('tipoComprobante').value = f.tipoComprobante || '1';
+        document.getElementById('fecha').value = f.fecha || '';
+        document.getElementById('timbrado').value = f.timbrado || '';
+        document.getElementById('numeroComprobante').value = f.numeroComprobante || '';
+        document.getElementById('montoTotal').value = f.montoTotal || '';
+        document.getElementById('tipoIVA').value = f.tipoIVA || '10';
+        document.getElementById('condicionCompra').value = f.condicionCompra || '01';
+        document.getElementById('indiceEdicion').value = 'editar';
+        document.getElementById('docIdEdicion').value = docId;
+        document.getElementById('modoFormulario').textContent = 'Editar';
+        document.getElementById('btnGuardar').textContent = '✏️ Actualizar';
+        document.getElementById('btnCancelarEdicion').classList.remove('hidden');
+    };
+
+    window.eliminarFactura = async (docId) => {
+        if (!confirm('¿Eliminar esta factura?')) return;
+        try {
+            await db.collection('facturas').doc(docId).delete();
+            mostrarMensaje('', 'Factura eliminada.', 'info');
+        } catch (e) {
+            mostrarMensaje('', 'Error: ' + e.message, 'error');
+        }
+    };
+
+    window.toggleImputada = async (docId) => {
+        const f = facturas.find(f => f.id === docId);
+        if (!f) return;
+        const nuevoEstado = !f.imputada;
+        try {
+            await db.collection('facturas').doc(docId).update({ imputada: nuevoEstado });
+        } catch (e) {
+            mostrarMensaje('', 'Error: ' + e.message, 'error');
+        }
+    };
+
+    function cancelarEdicion() {
+        document.getElementById('indiceEdicion').value = '-1';
+        document.getElementById('docIdEdicion').value = '';
+        document.getElementById('modoFormulario').textContent = 'Agregar';
+        document.getElementById('btnGuardar').textContent = '💾 Guardar';
+        document.getElementById('btnCancelarEdicion').classList.add('hidden');
+        limpiarFormularioFactura();
+    }
+
+    function limpiarFormularioFactura() {
+        document.getElementById('ruc').value = '';
+        document.getElementById('nombre').value = '';
+        document.getElementById('fecha').value = '';
+        document.getElementById('timbrado').value = '';
+        document.getElementById('numeroComprobante').value = '';
+        document.getElementById('montoTotal').value = '';
+    }
+
+    document.getElementById('btnGuardar').addEventListener('click', () => {
+        const factura = {
+            ruc: document.getElementById('ruc').value.trim(),
+            nombre: document.getElementById('nombre').value.trim(),
+            tipoComprobante: document.getElementById('tipoComprobante').value,
+            fecha: document.getElementById('fecha').value,
+            timbrado: document.getElementById('timbrado').value.trim(),
+            numeroComprobante: document.getElementById('numeroComprobante').value.trim(),
+            montoTotal: document.getElementById('montoTotal').value.trim(),
+            tipoIVA: document.getElementById('tipoIVA').value,
+            condicionCompra: document.getElementById('condicionCompra').value,
+            monedaExtranjera: '0',
+            imputada: false
+        };
+        if (!factura.ruc || !factura.nombre || !factura.fecha || !factura.timbrado || !factura.numeroComprobante || !factura.montoTotal) {
+            alert('Completá todos los campos obligatorios.');
+            return;
+        }
+        guardarFacturaFirestore(factura);
+    });
+    document.getElementById('btnCancelarEdicion').addEventListener('click', cancelarEdicion);
+    document.getElementById('btnLimpiar').addEventListener('click', () => { cancelarEdicion(); limpiarFormularioFactura(); });
+    document.getElementById('btnNuevaFactura').addEventListener('click', () => { cancelarEdicion(); limpiarFormularioFactura(); });
+
+    // QR y OCR (similar a versiones anteriores, adaptado)
+    let scanner = null;
+    function iniciarScanner() {
+        scanner.start({ facingMode: "environment" }, { fps: 10, qrbox: 250 }, onScanSuccess, onScanFailure)
+        .catch(e => alert('Error cámara: ' + e));
+        document.getElementById('btnIniciarScanner').classList.add('hidden');
+        document.getElementById('btnDetenerScanner').classList.remove('hidden');
+        document.getElementById('reader').classList.remove('hidden');
+    }
+    function detenerScanner() {
+        scanner.stop().then(() => {
+            document.getElementById('btnIniciarScanner').classList.remove('hidden');
+            document.getElementById('btnDetenerScanner').classList.add('hidden');
+            document.getElementById('reader').classList.add('hidden');
+        });
+    }
+    function onScanSuccess(texto) {
+        let d = {};
+        if (texto.startsWith('http')) try {
+            const u = new URL(texto); const p = u.searchParams;
+            if (p.has('ruc')) d.ruc = p.get('ruc');
+            if (p.has('timbrado')) d.timbrado = p.get('timbrado');
+            if (p.has('nro')) d.numeroComprobante = p.get('nro');
+            if (p.has('fecha')) d.fecha = p.get('fecha');
+            if (p.has('monto')) d.montoTotal = p.get('monto');
+            if (p.has('nombre')) d.nombre = p.get('nombre');
+            if (p.has('iva')) d.tipoIVA = p.get('iva');
+        } catch(e) {}
+        if (!d.ruc && texto.startsWith('{')) try {
+            const j = JSON.parse(texto);
+            d.ruc = j.ruc || j.RUC; d.timbrado = j.timbrado || j.Timbrado;
+            d.numeroComprobante = j.numero || j.Numero || j.nro;
+            d.fecha = j.fecha || j.Fecha; d.montoTotal = j.monto || j.Monto || j.total;
+            d.nombre = j.nombre || j.Nombre || j.razonSocial; d.tipoIVA = j.iva || j.IVA;
+        } catch(e) {}
+        if (Object.keys(d).length === 0) { alert('No se reconocieron datos del QR.\n'+texto); detenerScanner(); return; }
+        rellenarFormulario(d); detenerScanner();
+    }
+    function onScanFailure() {}
+    function rellenarFormulario(d) {
+        if (d.ruc) document.getElementById('ruc').value = d.ruc;
+        if (d.nombre) document.getElementById('nombre').value = d.nombre;
+        if (d.timbrado) document.getElementById('timbrado').value = d.timbrado;
+        if (d.numeroComprobante) document.getElementById('numeroComprobante').value = d.numeroComprobante;
+        if (d.fecha) document.getElementById('fecha').value = d.fecha;
+        if (d.montoTotal) document.getElementById('montoTotal').value = d.montoTotal;
+        if (d.tipoIVA) document.getElementById('tipoIVA').value = d.tipoIVA;
+    }
+    // OCR (similar)
+    const inputFile = document.createElement('input');
+    inputFile.type='file'; inputFile.accept='image/*'; inputFile.capture='environment';
+    inputFile.style.display='none'; document.body.appendChild(inputFile);
+    document.getElementById('btnAbrirOCR').addEventListener('click', ()=>inputFile.click());
+    inputFile.addEventListener('change', async (e) => {
+        const file = e.target.files[0]; if(!file) return;
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+            document.getElementById('imgOCR').src = ev.target.result;
+            document.getElementById('ocrPreview').classList.remove('hidden');
+        };
+        reader.readAsDataURL(file);
+        const { data: { text } } = await Tesseract.recognize(file, 'spa', { logger: m => {
+            if(m.status==='recognizing text') document.getElementById('estadoOCR').textContent = `OCR: ${Math.round(m.progress*100)}%`;
+        }});
+        document.getElementById('textoOCR').value = text;
+        rellenarFormulario(extraerDatosFactura(text));
+    });
+    function extraerDatosFactura(texto) {
+        const d = {};
+        const txt = texto.replace(/\s+/g,' ').trim();
+        const rucMatch = txt.match(/(\d{6,8}-\d)/);
+        if(rucMatch) d.ruc = rucMatch[1];
+        const timbMatch = txt.match(/(?:Timbrado|TIMBRADO)[^\d]*(\d{8})/i) || txt.match(/\b(\d{8})\b/);
+        if(timbMatch) d.timbrado = timbMatch[1];
+        const nroMatch = txt.match(/(\d{3,4}-\d{3,4}-\d{4,10})/);
+        if(nroMatch) d.numeroComprobante = nroMatch[1];
+        const fechaMatch = txt.match(/(\d{2}\/\d{2}\/\d{4})/);
+        if(fechaMatch) { const [d,m,a] = fechaMatch[1].split('/'); d.fecha = `${a}-${m}-${d}`; }
+        const montoMatch = txt.match(/(?:TOTAL|Total)\s*:?\s*(?:Gs\.?|\u20B2)?\s*([\d]{1,3}(?:\.[\d]{3})*(?:,\d{2})?)/i);
+        if(montoMatch) d.montoTotal = parseFloat(montoMatch[1].replace(/\./g,'').replace(',','.'));
+        if(/10\s*%/.test(txt)) d.tipoIVA='10';
+        else if(/5\s*%/.test(txt)) d.tipoIVA='5';
+        else if(/exento/i.test(txt)) d.tipoIVA='0';
+        return d;
+    }
+    document.getElementById('btnReextraer').addEventListener('click', ()=>{
+        const texto = document.getElementById('textoOCR').value;
+        if(texto.trim()) rellenarFormulario(extraerDatosFactura(texto));
+    });
+    // Inicializar QR
+    scanner = new Html5Qrcode("reader");
+    document.getElementById('btnIniciarScanner').addEventListener('click', iniciarScanner);
+    document.getElementById('btnDetenerScanner').addEventListener('click', detenerScanner);
+
+    // Exportación ZIP (usa facturas actuales)
+    document.getElementById('btnExportar').addEventListener('click', async () => {
+        const incluir = document.getElementById('incluirImputadas').checked;
+        const lista = incluir ? facturas : facturas.filter(f => !f.imputada);
+        if (lista.length === 0) { alert('No hay facturas para exportar.'); return; }
+        const miRUC = document.getElementById('miRUC').value.trim();
+        const periodo = document.getElementById('periodo').value.trim();
+        const version = document.getElementById('versionID').value.trim();
+        if (!miRUC || !periodo || !version) { alert('RUC, periodo y versión requeridos'); return; }
+        const enc = [
+            'CÓDIGO TIPO DE REGISTRO','CÓDIGO TIPO DE IDENTIFICACIÓN DEL PROVEEDOR/VENDEDOR','NÚMERO DE IDENTIFICACIÓN DEL PROVEEDOR/VENDEDOR',
+            'NOMBRE O RAZÓN SOCIAL DEL PROVEEDOR/VENDEDOR','CÓDIGO TIPO DE COMPROBANTE','FECHA DE EMISIÓN DEL COMPROBANTE','NÚMERO DE TIMBRADO',
+            'NÚMERO DEL COMPROBANTE','MONTO GRAVADO AL 10% (IVA INCLUIDO)','MONTO GRAVADO AL 5% (IVA INCLUIDO)','MONTO NO GRAVADO O EXENTO',
+            'MONTO TOTAL DEL COMPROBANTE','CONDICIÓN DE COMPRA','OPERACIÓN EN MONEDA EXTRANJERA','IMPUTA AL IVA','IMPUTA AL IRE',
+            'IMPUTA AL IRP-RSP','NO IMPUTA','NÚMERO DEL COMPROBANTE DE VENTA ASOCIADO','TIMBRADO DEL COMPROBANTE DE VENTA ASOCIADO'
+        ];
+        const filas = [enc.join(',')];
+        lista.forEach(f => {
+            const m = parseFloat(f.montoTotal)||0;
+            let m10=0, m5=0, me=0;
+            if(f.tipoIVA==='10') m10=m; else if(f.tipoIVA==='5') m5=m; else me=m;
+            const fila = [
+                document.getElementById('cfgTipoRegistro').value,
+                document.getElementById('cfgTipoIdentificacion').value,
+                f.ruc, f.nombre, f.tipoComprobante, f.fecha, f.timbrado, f.numeroComprobante,
+                m10.toFixed(2), m5.toFixed(2), me.toFixed(2), m.toFixed(2),
+                f.condicionCompra||'01', '0',
+                document.getElementById('cfgImputaIVA').value,
+                document.getElementById('cfgImputaIRE').value,
+                document.getElementById('cfgImputaIRP').value,
+                document.getElementById('cfgNoImputa').value,
+                '', ''
+            ];
+            filas.push(fila.map(c => String(c).includes(',')||String(c).includes('"')?`"${String(c).replace(/"/g,'""')}"`:c).join(','));
+        });
+        const zip = new JSZip();
+        zip.file(`${miRUC}_${periodo}_Compra_${version}.csv`, filas.join('\n'));
+        const blob = await zip.generateAsync({type:'blob'});
+        saveAs(blob, `${miRUC}_${periodo}_Compra_${version}.zip`);
+    });
+</script>
+</body>
+</html>
