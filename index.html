@@ -249,7 +249,6 @@
     });
 
     async function logout() {
-        // Detener scanner si estaba activo
         if (scanner) {
             try { await scanner.stop(); } catch(e) {}
             scanner = null;
@@ -281,7 +280,6 @@
             }
         } else {
             if (facturasListener) facturasListener();
-            // Detener scanner si estaba corriendo
             if (scanner) {
                 try { await scanner.stop(); } catch(e) {}
                 scanner = null;
@@ -471,13 +469,11 @@
         };
         const docId = document.getElementById('docIdEdicion').value;
         
-        // Validar campos obligatorios
         if (!facturaData.ruc || !facturaData.nombre || !facturaData.fecha || !facturaData.timbrado || !facturaData.numeroComprobante || isNaN(facturaData.montoTotal)) {
             mostrarMensaje('', 'Completá todos los campos obligatorios.', 'error');
             return;
         }
         
-        // Validar duplicado
         if (validarDuplicado(facturaData, docId)) {
             mostrarMensaje('', 'Ya existe una factura con el mismo RUC, timbrado y número.', 'error');
             return;
@@ -502,15 +498,13 @@
         document.getElementById('docIdEdicion').value = '';
         document.getElementById('btnCancelarEdicion').classList.add('hidden');
         document.getElementById('modoFormulario').innerText = 'Agregar';
-        // Opcional: cerrar preview OCR si estaba abierto
-        document.getElementById('ocrPreview').classList.add('hidden');
     }
 
     document.getElementById('btnGuardar').addEventListener('click', guardarFactura);
     document.getElementById('btnCancelarEdicion').addEventListener('click', limpiarFormulario);
     document.getElementById('btnNuevaFactura').addEventListener('click', limpiarFormulario);
 
-    // ================== QR (con soporte avanzado para SET) ==================
+    // ================== QR ==================
     async function iniciarScanner() {
         if (scanner) {
             try { await scanner.stop(); } catch(e) {}
@@ -549,9 +543,8 @@
 
     async function onScanSuccess(decodedText) {
         console.log("QR escaneado:", decodedText);
-        await detenerScanner(); // Detenemos después del primer QR exitoso
+        await detenerScanner();
 
-        // Procesar QR de SET (Ekuatia)
         if (decodedText.includes('ekuatia.set.gov.py')) {
             try {
                 const url = new URL(decodedText);
@@ -610,7 +603,6 @@
             }
         }
         
-        // Si no es SET, intentar como JSON directo
         try {
             const json = JSON.parse(decodedText);
             const d = {};
@@ -627,11 +619,9 @@
         }
     }
 
-    function onScanFailure(err) { 
-        // No mostrar errores de lectura para no molestar
-        // console.warn(err); 
-    }
+    function onScanFailure(err) { }
 
+    // ================== FUNCIÓN RELLENAR FORMULARIO (CORREGIDA: NO LIMPIA) ==================
     function rellenarFormulario(d) {
         if (d.ruc) document.getElementById('ruc').value = d.ruc;
         if (d.nombre) document.getElementById('nombre').value = d.nombre;
@@ -649,9 +639,8 @@
         if (d.tipoIVA) document.getElementById('tipoIVA').value = d.tipoIVA;
         if (d.tipoComprobante) document.getElementById('tipoComprobante').value = d.tipoComprobante;
         if (d.condicionCompra) document.getElementById('condicionCompra').value = d.condicionCompra;
-        // Cancelar edición si estábamos editando
-        limpiarFormulario(); // limpia el modo edición pero mantiene los valores que acabamos de poner? No, mejor no llamar limpiarFormulario porque resetea.
-        // Solo aseguramos que no haya edición pendiente
+        
+        // Asegurar que no quede en modo edición
         document.getElementById('docIdEdicion').value = '';
         document.getElementById('btnCancelarEdicion').classList.add('hidden');
         document.getElementById('modoFormulario').innerText = 'Agregar';
@@ -660,7 +649,7 @@
     document.getElementById('btnIniciarScanner').addEventListener('click', iniciarScanner);
     document.getElementById('btnDetenerScanner').addEventListener('click', detenerScanner);
 
-    // ================== OCR ==================
+    // ================== OCR MEJORADO (extrae nombre y monto aunque estén en letras grandes) ==================
     const inputFile = document.createElement('input');
     inputFile.type = 'file';
     inputFile.accept = 'image/*';
@@ -683,38 +672,72 @@
         const datosExtraidos = extraerDatosFactura(text);
         rellenarFormulario(datosExtraidos);
     });
-    
+
+    // FUNCIÓN MEJORADA PARA EXTRAER DATOS (nombre robusto, monto en cualquier formato)
     function extraerDatosFactura(texto) {
         const d = {};
         const txt = texto.replace(/\s+/g, ' ').trim();
-        // RUC
-        const rucMatch = txt.match(/(\d{6,8}-\d)/);
+        
+        // RUC (formato 123456-1)
+        const rucMatch = txt.match(/\b(\d{6,8}-\d)\b/);
         if (rucMatch) d.ruc = rucMatch[1];
-        // Timbrado
+        
+        // NOMBRE DEL PROVEEDOR: busca la línea anterior al RUC o patrones específicos
+        if (d.ruc) {
+            const antesDelRuc = txt.substring(0, txt.indexOf(d.ruc));
+            const lineas = antesDelRuc.split(/[\n\r]+/).filter(l => l.trim().length > 0);
+            if (lineas.length > 0) {
+                let posibleNombre = lineas[lineas.length - 1].trim();
+                posibleNombre = posibleNombre.replace(/^(Razón Social|Nombre|Proveedor|R\.S\.)\s*:?\s*/i, '');
+                if (posibleNombre.length > 2) d.nombre = posibleNombre;
+            }
+        }
+        if (!d.nombre) {
+            const nombreMatch = txt.match(/(?:Razón Social|Nombre|Proveedor)\s*:?\s*([A-ZÁÉÍÓÚÑ\s]+?)(?=\d{6,8}-\d|$)/i);
+            if (nombreMatch) d.nombre = nombreMatch[1].trim();
+        }
+        
+        // Timbrado (8 dígitos)
         const timbMatch = txt.match(/(?:Timbrado|TIMBRADO)[^\d]*(\d{8})/i) || txt.match(/\b(\d{8})\b/);
         if (timbMatch) d.timbrado = timbMatch[1];
-        // Número comprobante
-        const nroMatch = txt.match(/(\d{3,4}-\d{3,4}-\d{4,10})/);
+        
+        // Número comprobante (formato 001-001-0000123)
+        const nroMatch = txt.match(/\b(\d{3,4}-\d{3,4}-\d{4,10})\b/);
         if (nroMatch) d.numeroComprobante = nroMatch[1];
-        // Fecha
-        const fechaMatch = txt.match(/(\d{2}\/\d{2}\/\d{4})/);
-        if (fechaMatch) { const [dia, mes, anio] = fechaMatch[1].split('/'); d.fecha = `${anio}-${mes}-${dia}`; }
-        // Monto total
-        const montoMatch = txt.match(/(?:TOTAL|Total)\s*:?\s*(?:Gs\.?|\u20B2)?\s*([\d]{1,3}(?:\.[\d]{3})*(?:,\d{2})?)/i);
-        if (montoMatch) d.montoTotal = parseFloat(montoMatch[1].replace(/\./g, '').replace(',', '.'));
+        
+        // Fecha (dd/mm/aaaa)
+        const fechaMatch = txt.match(/\b(\d{2}\/\d{2}\/\d{4})\b/);
+        if (fechaMatch) {
+            const [dia, mes, anio] = fechaMatch[1].split('/');
+            d.fecha = `${anio}-${mes}-${dia}`;
+        }
+        
+        // MONTO TOTAL: acepta puntos como separadores de miles y coma decimal
+        let montoMatch = txt.match(/(?:Total|TOTAL|Monto total)\s*:?\s*(?:Gs\.?|\u20B2)?\s*([\d.,]+)/i);
+        if (!montoMatch) {
+            montoMatch = txt.match(/\b(\d{1,3}(?:\.\d{3})*(?:,\d{2})?)\b/);
+        }
+        if (montoMatch) {
+            let montoStr = montoMatch[1].replace(/\./g, '').replace(',', '.');
+            d.montoTotal = parseFloat(montoStr);
+        }
+        
         // Tipo IVA
         if (/10\s*%/.test(txt)) d.tipoIVA = '10';
         else if (/5\s*%/.test(txt)) d.tipoIVA = '5';
         else if (/exento/i.test(txt)) d.tipoIVA = '0';
+        
         // Tipo comprobante
         if (/nota de crédito/i.test(txt)) d.tipoComprobante = '4';
         else if (/nota de débito/i.test(txt)) d.tipoComprobante = '5';
         else if (/recibo/i.test(txt)) d.tipoComprobante = '2';
         else if (/autofactura/i.test(txt)) d.tipoComprobante = '3';
         else d.tipoComprobante = '1';
+        
         // Condición compra
         if (/crédito/i.test(txt)) d.condicionCompra = '02';
         else d.condicionCompra = '01';
+        
         return d;
     }
     
