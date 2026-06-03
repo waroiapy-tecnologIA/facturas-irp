@@ -94,6 +94,7 @@
                 <label>Texto reconocido (editá si es necesario):</label>
                 <textarea id="textoOCR" rows="4"></textarea>
                 <button id="btnReextraer" class="btn-secondary">Re-extraer datos</button>
+                <button id="btnVerTextoOCR" class="btn-secondary">Ver texto OCR completo</button>
             </div>
         </div>
 
@@ -621,7 +622,7 @@
 
     function onScanFailure(err) { }
 
-    // ================== FUNCIÓN RELLENAR FORMULARIO (CORREGIDA: NO LIMPIA) ==================
+    // ================== FUNCIÓN RELLENAR FORMULARIO (NO LIMPIA) ==================
     function rellenarFormulario(d) {
         if (d.ruc) document.getElementById('ruc').value = d.ruc;
         if (d.nombre) document.getElementById('nombre').value = d.nombre;
@@ -649,7 +650,128 @@
     document.getElementById('btnIniciarScanner').addEventListener('click', iniciarScanner);
     document.getElementById('btnDetenerScanner').addEventListener('click', detenerScanner);
 
-    // ================== OCR MEJORADO (extrae nombre y monto aunque estén en letras grandes) ==================
+    // ================== PREPROCESAMIENTO DE IMAGEN PARA OCR ==================
+    async function preprocesarImagen(file) {
+        return new Promise((resolve) => {
+            const img = new Image();
+            const url = URL.createObjectURL(file);
+            img.onload = () => {
+                const canvas = document.createElement('canvas');
+                const ctx = canvas.getContext('2d');
+                // Escalar imagen al doble (mejora reconocimiento de letras grandes)
+                const scale = 2;
+                canvas.width = img.width * scale;
+                canvas.height = img.height * scale;
+                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                // Aplicar filtro de binarización (umbral)
+                const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                const data = imageData.data;
+                for (let i = 0; i < data.length; i += 4) {
+                    const avg = (data[i] + data[i+1] + data[i+2]) / 3;
+                    const threshold = 120;
+                    const value = avg > threshold ? 255 : 0;
+                    data[i] = value;     // R
+                    data[i+1] = value;   // G
+                    data[i+2] = value;   // B
+                }
+                ctx.putImageData(imageData, 0, 0);
+                canvas.toBlob((blob) => {
+                    URL.revokeObjectURL(url);
+                    resolve(blob);
+                }, 'image/png');
+            };
+            img.src = url;
+        });
+    }
+
+    // ================== OCR MEJORADO (extracción robusta) ==================
+    function extraerDatosFactura(texto) {
+        const d = {};
+        // Separar líneas y tomar las primeras 15 (donde suelen estar RUC, fecha, nombre)
+        const lineas = texto.split(/\r?\n/).filter(l => l.trim().length > 0);
+        const primerasLineas = lineas.slice(0, 15).join(' ');
+        const txt = texto.replace(/\s+/g, ' ').trim();
+        
+        // 1. RUC: busca patrón 123456-1 (6 a 8 dígitos, guión, 1 dígito)
+        let rucMatch = txt.match(/\b(\d{6,8}-\d)\b/);
+        if (!rucMatch && primerasLineas) {
+            rucMatch = primerasLineas.match(/\b(\d{6,8}-\d)\b/);
+        }
+        if (rucMatch) d.ruc = rucMatch[1];
+        
+        // 2. Fecha: formato dd/mm/aaaa (busca en primeras líneas)
+        let fechaMatch = primerasLineas.match(/\b(\d{2}\/\d{2}\/\d{4})\b/);
+        if (!fechaMatch) fechaMatch = txt.match(/\b(\d{2}\/\d{2}\/\d{4})\b/);
+        if (fechaMatch) {
+            const [dia, mes, anio] = fechaMatch[1].split('/');
+            d.fecha = `${anio}-${mes}-${dia}`;
+        }
+        
+        // 3. Nombre proveedor: toma la línea justo antes del RUC
+        if (d.ruc) {
+            const indiceRuc = txt.indexOf(d.ruc);
+            if (indiceRuc > 0) {
+                const antes = txt.substring(0, indiceRuc);
+                const posibles = antes.match(/[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+){1,4}/g);
+                if (posibles && posibles.length > 0) {
+                    d.nombre = posibles[ posibles.length - 1 ].trim();
+                }
+            }
+        }
+        if (!d.nombre) {
+            const nombreMatch = txt.match(/(?:Razón Social|Nombre|Proveedor)\s*:?\s*([A-ZÁÉÍÓÚÑ\s]+?)(?=\d{6,8}-\d|$)/i);
+            if (nombreMatch) d.nombre = nombreMatch[1].trim();
+        }
+        
+        // 4. Timbrado (8 dígitos)
+        const timbMatch = txt.match(/(?:Timbrado|TIMBRADO)[^\d]*(\d{8})/i) || txt.match(/\b(\d{8})\b/);
+        if (timbMatch) d.timbrado = timbMatch[1];
+        
+        // 5. Número comprobante (formato 001-001-0000123)
+        const nroMatch = txt.match(/\b(\d{3,4}-\d{3,4}-\d{4,10})\b/);
+        if (nroMatch) d.numeroComprobante = nroMatch[1];
+        
+        // 6. MONTO TOTAL: busca en todo el texto pero prioriza líneas con "Total"
+        let montoMatch = txt.match(/(?:Total|TOTAL|Monto total|Total Gs\.)\s*:?\s*[^0-9]*([\d.,]+)/i);
+        if (!montoMatch) {
+            // Buscar cualquier número con formato de moneda (1.234.567,89)
+            montoMatch = txt.match(/\b(\d{1,3}(?:\.\d{3})*(?:,\d{2})?)\b/);
+            if (montoMatch) {
+                let montos = [...txt.matchAll(/\b(\d{1,3}(?:\.\d{3})*(?:,\d{2})?)\b/g)];
+                if (montos.length) {
+                    let mayor = 0;
+                    for (let m of montos) {
+                        let val = parseFloat(m[1].replace(/\./g, '').replace(',', '.'));
+                        if (val > mayor) mayor = val;
+                    }
+                    if (mayor > 0) d.montoTotal = mayor;
+                }
+            }
+        }
+        if (montoMatch && !d.montoTotal) {
+            let montoStr = montoMatch[1].replace(/\./g, '').replace(',', '.');
+            d.montoTotal = parseFloat(montoStr);
+        }
+        
+        // 7. Tipo IVA
+        if (/10\s*%/.test(txt)) d.tipoIVA = '10';
+        else if (/5\s*%/.test(txt)) d.tipoIVA = '5';
+        else if (/exento/i.test(txt)) d.tipoIVA = '0';
+        
+        // 8. Tipo comprobante
+        if (/nota de crédito/i.test(txt)) d.tipoComprobante = '4';
+        else if (/nota de débito/i.test(txt)) d.tipoComprobante = '5';
+        else if (/recibo/i.test(txt)) d.tipoComprobante = '2';
+        else if (/autofactura/i.test(txt)) d.tipoComprobante = '3';
+        else d.tipoComprobante = '1';
+        
+        // 9. Condición compra
+        if (/crédito/i.test(txt)) d.condicionCompra = '02';
+        else d.condicionCompra = '01';
+        
+        return d;
+    }
+
     const inputFile = document.createElement('input');
     inputFile.type = 'file';
     inputFile.accept = 'image/*';
@@ -659,93 +781,49 @@
     inputFile.addEventListener('change', async (e) => {
         const file = e.target.files[0];
         if (!file) return;
+        
+        // Mostrar vista previa
         const reader = new FileReader();
         reader.onload = (ev) => {
             document.getElementById('imgOCR').src = ev.target.result;
             document.getElementById('ocrPreview').classList.remove('hidden');
         };
         reader.readAsDataURL(file);
-        const { data: { text } } = await Tesseract.recognize(file, 'spa', {
-            logger: m => { if (m.status === 'recognizing text') document.getElementById('estadoOCR').textContent = `OCR: ${Math.round(m.progress * 100)}%`; }
+        
+        // Preprocesar imagen para mejorar OCR
+        document.getElementById('estadoOCR').textContent = 'Mejorando imagen...';
+        const imagenMejorada = await preprocesarImagen(file);
+        
+        document.getElementById('estadoOCR').textContent = 'Reconociendo texto (Tesseract)...';
+        const { data: { text } } = await Tesseract.recognize(imagenMejorada, 'spa', {
+            logger: m => {
+                if (m.status === 'recognizing text') {
+                    document.getElementById('estadoOCR').textContent = `OCR: ${Math.round(m.progress * 100)}%`;
+                }
+            }
         });
+        
         document.getElementById('textoOCR').value = text;
         const datosExtraidos = extraerDatosFactura(text);
         rellenarFormulario(datosExtraidos);
+        document.getElementById('estadoOCR').textContent = 'OCR completado. Revisá los datos extraídos.';
     });
-
-    // FUNCIÓN MEJORADA PARA EXTRAER DATOS (nombre robusto, monto en cualquier formato)
-    function extraerDatosFactura(texto) {
-        const d = {};
-        const txt = texto.replace(/\s+/g, ' ').trim();
-        
-        // RUC (formato 123456-1)
-        const rucMatch = txt.match(/\b(\d{6,8}-\d)\b/);
-        if (rucMatch) d.ruc = rucMatch[1];
-        
-        // NOMBRE DEL PROVEEDOR: busca la línea anterior al RUC o patrones específicos
-        if (d.ruc) {
-            const antesDelRuc = txt.substring(0, txt.indexOf(d.ruc));
-            const lineas = antesDelRuc.split(/[\n\r]+/).filter(l => l.trim().length > 0);
-            if (lineas.length > 0) {
-                let posibleNombre = lineas[lineas.length - 1].trim();
-                posibleNombre = posibleNombre.replace(/^(Razón Social|Nombre|Proveedor|R\.S\.)\s*:?\s*/i, '');
-                if (posibleNombre.length > 2) d.nombre = posibleNombre;
-            }
-        }
-        if (!d.nombre) {
-            const nombreMatch = txt.match(/(?:Razón Social|Nombre|Proveedor)\s*:?\s*([A-ZÁÉÍÓÚÑ\s]+?)(?=\d{6,8}-\d|$)/i);
-            if (nombreMatch) d.nombre = nombreMatch[1].trim();
-        }
-        
-        // Timbrado (8 dígitos)
-        const timbMatch = txt.match(/(?:Timbrado|TIMBRADO)[^\d]*(\d{8})/i) || txt.match(/\b(\d{8})\b/);
-        if (timbMatch) d.timbrado = timbMatch[1];
-        
-        // Número comprobante (formato 001-001-0000123)
-        const nroMatch = txt.match(/\b(\d{3,4}-\d{3,4}-\d{4,10})\b/);
-        if (nroMatch) d.numeroComprobante = nroMatch[1];
-        
-        // Fecha (dd/mm/aaaa)
-        const fechaMatch = txt.match(/\b(\d{2}\/\d{2}\/\d{4})\b/);
-        if (fechaMatch) {
-            const [dia, mes, anio] = fechaMatch[1].split('/');
-            d.fecha = `${anio}-${mes}-${dia}`;
-        }
-        
-        // MONTO TOTAL: acepta puntos como separadores de miles y coma decimal
-        let montoMatch = txt.match(/(?:Total|TOTAL|Monto total)\s*:?\s*(?:Gs\.?|\u20B2)?\s*([\d.,]+)/i);
-        if (!montoMatch) {
-            montoMatch = txt.match(/\b(\d{1,3}(?:\.\d{3})*(?:,\d{2})?)\b/);
-        }
-        if (montoMatch) {
-            let montoStr = montoMatch[1].replace(/\./g, '').replace(',', '.');
-            d.montoTotal = parseFloat(montoStr);
-        }
-        
-        // Tipo IVA
-        if (/10\s*%/.test(txt)) d.tipoIVA = '10';
-        else if (/5\s*%/.test(txt)) d.tipoIVA = '5';
-        else if (/exento/i.test(txt)) d.tipoIVA = '0';
-        
-        // Tipo comprobante
-        if (/nota de crédito/i.test(txt)) d.tipoComprobante = '4';
-        else if (/nota de débito/i.test(txt)) d.tipoComprobante = '5';
-        else if (/recibo/i.test(txt)) d.tipoComprobante = '2';
-        else if (/autofactura/i.test(txt)) d.tipoComprobante = '3';
-        else d.tipoComprobante = '1';
-        
-        // Condición compra
-        if (/crédito/i.test(txt)) d.condicionCompra = '02';
-        else d.condicionCompra = '01';
-        
-        return d;
-    }
     
     document.getElementById('btnReextraer').addEventListener('click', () => {
         const texto = document.getElementById('textoOCR').value;
         if (texto.trim()) {
             const datos = extraerDatosFactura(texto);
             rellenarFormulario(datos);
+        }
+    });
+    
+    // Botón para ver texto OCR completo (depuración)
+    document.getElementById('btnVerTextoOCR').addEventListener('click', () => {
+        const texto = document.getElementById('textoOCR').value;
+        if (texto) {
+            alert(texto);
+        } else {
+            alert('No hay texto OCR aún. Escaneá una factura primero.');
         }
     });
 
