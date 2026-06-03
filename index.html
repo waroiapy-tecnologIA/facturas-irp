@@ -460,7 +460,7 @@
     document.getElementById('btnCancelarEdicion').addEventListener('click', limpiarFormulario);
     document.getElementById('btnNuevaFactura').addEventListener('click', limpiarFormulario);
 
-    // ================== QR (con soporte para URL de SET) ==================
+    // ================== QR (con soporte avanzado para SET) ==================
     function iniciarScanner() {
         if (!scanner) scanner = new Html5Qrcode("reader");
         scanner.start({ facingMode: "environment" }, { fps: 10, qrbox: 250 }, onScanSuccess, onScanFailure);
@@ -472,34 +472,92 @@
     }
 
     function onScanSuccess(decodedText) {
+        console.log("QR escaneado:", decodedText);
+        
+        // Función para decodificar base64 de forma robusta
+        function decodeBase64(str) {
+            try {
+                // Reemplazar caracteres no estándar de URL-safe base64
+                let base64 = str.replace(/-/g, '+').replace(/_/g, '/');
+                // Decodificar
+                let decoded = atob(base64);
+                // Intentar convertir caracteres especiales
+                try {
+                    decoded = decodeURIComponent(escape(decoded));
+                } catch(e) {}
+                return decoded;
+            } catch(e) {
+                return null;
+            }
+        }
+
         // Si es URL de Ekuatia (factura electrónica paraguaya)
         if (decodedText.includes('ekuatia.set.gov.py')) {
             try {
                 const url = new URL(decodedText);
-                const p = url.searchParams.get('p');
-                if (!p) throw new Error('No contiene parámetro p');
-                // Decodificar base64
-                const jsonStr = atob(p);
-                const factura = JSON.parse(jsonStr);
-                // Mapeo de campos según lo que envía SET (ajusta según necesidad)
+                // Buscar parámetros posibles (p, d, data, q, etc.)
+                let dataParam = url.searchParams.get('p') || url.searchParams.get('d') || url.searchParams.get('data') || url.searchParams.get('q');
+                if (!dataParam) {
+                    alert('El QR no contiene parámetro de datos. URL: ' + decodedText);
+                    detenerScanner();
+                    return;
+                }
+                
+                let jsonStr = decodeBase64(dataParam);
+                if (!jsonStr) {
+                    alert('No se pudo decodificar el base64. Parámetro: ' + dataParam);
+                    detenerScanner();
+                    return;
+                }
+                
+                // Intentar parsear JSON (puede venir con padding o caracteres extra)
+                let factura;
+                try {
+                    factura = JSON.parse(jsonStr);
+                } catch(e) {
+                    // Si falla, limpiar caracteres no imprimibles
+                    let cleaned = jsonStr.replace(/[\x00-\x1F\x7F]/g, '');
+                    try {
+                        factura = JSON.parse(cleaned);
+                    } catch(e2) {
+                        alert('El texto decodificado no es un JSON válido. Primeros 200 caracteres:\n' + jsonStr.substring(0,200));
+                        detenerScanner();
+                        return;
+                    }
+                }
+                
+                // Mapeo flexible de campos
                 const d = {};
-                d.ruc = factura.ruc_proveedor || factura.ruc;
-                d.nombre = factura.razon_social_proveedor || factura.nombre;
-                d.timbrado = factura.timbrado;
-                d.numeroComprobante = factura.numero_comprobante || factura.nro_comprobante;
-                d.fecha = factura.fecha_emision || factura.fecha;
-                d.montoTotal = factura.monto_total || factura.total;
-                // Intento detectar IVA: si viene iva_porcentaje o si es 10% o 5%
-                if (factura.iva_porcentaje) d.tipoIVA = String(factura.iva_porcentaje);
-                else if (factura.iva === '10' || factura.iva === 10) d.tipoIVA = '10';
-                else if (factura.iva === '5' || factura.iva === 5) d.tipoIVA = '5';
+                d.ruc = factura.ruc_proveedor || factura.ruc || factura.RUC || factura.rucProveedor || factura.nro_documento_proveedor;
+                d.nombre = factura.razon_social_proveedor || factura.razonSocial || factura.nombre || factura.Nombre || factura.proveedor_denominacion;
+                d.timbrado = factura.timbrado || factura.Timbrado;
+                d.numeroComprobante = factura.numero_comprobante || factura.nro_comprobante || factura.numero || factura.Numero || factura.nroFactura;
+                d.fecha = factura.fecha_emision || factura.fechaEmision || factura.fecha || factura.Fecha;
+                d.montoTotal = factura.monto_total || factura.totalComprobante || factura.total || factura.monto || factura.monto_neto;
+                // IVA: puede venir como porcentaje o montos separados
+                if (factura.iva_porcentaje !== undefined) d.tipoIVA = String(factura.iva_porcentaje);
+                else if (factura.iva === 10 || factura.iva === '10') d.tipoIVA = '10';
+                else if (factura.iva === 5 || factura.iva === '5') d.tipoIVA = '5';
+                else if (factura.iva === 0) d.tipoIVA = '0';
+                else if (factura.monto_iva_10 && factura.monto_iva_10 > 0) d.tipoIVA = '10';
+                else if (factura.monto_iva_5 && factura.monto_iva_5 > 0) d.tipoIVA = '5';
                 else d.tipoIVA = '0';
+                
+                // Validar campos mínimos
+                if (!d.ruc || !d.montoTotal) {
+                    alert('No se pudieron extraer campos obligatorios (RUC o monto). Revisá la estructura en la consola.');
+                    console.log('Datos extraídos:', d);
+                    console.log('Factura original:', factura);
+                    detenerScanner();
+                    return;
+                }
+                
                 rellenarFormulario(d);
                 detenerScanner();
                 return;
             } catch (e) {
-                console.error('Error al decodificar QR de SET:', e);
-                alert('No se pudieron extraer los datos del QR de SET. Asegurate de escanear el QR que está en la factura (el que contiene toda la información).');
+                console.error('Error procesando QR de SET:', e);
+                alert('Error al procesar el QR: ' + e.message);
                 detenerScanner();
                 return;
             }
@@ -519,7 +577,7 @@
             rellenarFormulario(d);
             detenerScanner();
         } catch(e) {
-            alert('Formato de QR no reconocido. Escaneá el QR que aparece en la factura electrónica (generalmente contiene los datos del comprobante).');
+            alert('Formato de QR no reconocido. El texto escaneado es:\n' + decodedText.substring(0, 150));
             detenerScanner();
         }
     }
