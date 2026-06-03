@@ -214,15 +214,13 @@
         try {
             const cred = await auth.createUserWithEmailAndPassword(email, pass);
             const uid = cred.user.uid;
-            // Crear documento en la colección 'usuarios' con estado pendiente
             await db.collection('usuarios').doc(uid).set({
                 email: email,
                 estado: 'pendiente',
-                fechaRegistro: new Date()  // Usamos Date() para evitar problemas con serverTimestamp
+                fechaRegistro: new Date()
             });
             mostrarMensaje('mensajeLogin', '✅ Cuenta creada. Esperá la aprobación del administrador.', 'exito');
             await auth.signOut();
-            // Limpiar formulario y volver al login
             document.getElementById('regEmail').value = '';
             document.getElementById('regPassword').value = '';
             document.getElementById('formRegistro').classList.add('hidden');
@@ -253,7 +251,7 @@
     document.getElementById('btnLogoutPendiente').addEventListener('click', logout);
     document.getElementById('btnLogoutAdmin').addEventListener('click', logout);
 
-    // Observador del estado de autenticación (determina si es admin o usuario normal)
+    // Observador de autenticación
     auth.onAuthStateChanged(async (user) => {
         usuarioActual = user;
         if (user) {
@@ -462,7 +460,7 @@
     document.getElementById('btnCancelarEdicion').addEventListener('click', limpiarFormulario);
     document.getElementById('btnNuevaFactura').addEventListener('click', limpiarFormulario);
 
-    // ================== QR Y OCR ==================
+    // ================== QR (con soporte para URL de SET) ==================
     function iniciarScanner() {
         if (!scanner) scanner = new Html5Qrcode("reader");
         scanner.start({ facingMode: "environment" }, { fps: 10, qrbox: 250 }, onScanSuccess, onScanFailure);
@@ -472,7 +470,42 @@
         if (scanner) scanner.stop();
         document.getElementById('btnDetenerScanner').classList.add('hidden');
     }
+
     function onScanSuccess(decodedText) {
+        // Si es URL de Ekuatia (factura electrónica paraguaya)
+        if (decodedText.includes('ekuatia.set.gov.py')) {
+            try {
+                const url = new URL(decodedText);
+                const p = url.searchParams.get('p');
+                if (!p) throw new Error('No contiene parámetro p');
+                // Decodificar base64
+                const jsonStr = atob(p);
+                const factura = JSON.parse(jsonStr);
+                // Mapeo de campos según lo que envía SET (ajusta según necesidad)
+                const d = {};
+                d.ruc = factura.ruc_proveedor || factura.ruc;
+                d.nombre = factura.razon_social_proveedor || factura.nombre;
+                d.timbrado = factura.timbrado;
+                d.numeroComprobante = factura.numero_comprobante || factura.nro_comprobante;
+                d.fecha = factura.fecha_emision || factura.fecha;
+                d.montoTotal = factura.monto_total || factura.total;
+                // Intento detectar IVA: si viene iva_porcentaje o si es 10% o 5%
+                if (factura.iva_porcentaje) d.tipoIVA = String(factura.iva_porcentaje);
+                else if (factura.iva === '10' || factura.iva === 10) d.tipoIVA = '10';
+                else if (factura.iva === '5' || factura.iva === 5) d.tipoIVA = '5';
+                else d.tipoIVA = '0';
+                rellenarFormulario(d);
+                detenerScanner();
+                return;
+            } catch (e) {
+                console.error('Error al decodificar QR de SET:', e);
+                alert('No se pudieron extraer los datos del QR de SET. Asegurate de escanear el QR que está en la factura (el que contiene toda la información).');
+                detenerScanner();
+                return;
+            }
+        }
+        
+        // Si no es URL de SET, intentar como JSON directo
         try {
             const json = JSON.parse(decodedText);
             const d = {};
@@ -484,12 +517,15 @@
             d.nombre = json.nombre || json.Nombre || json.razonSocial;
             d.tipoIVA = json.iva || json.IVA;
             rellenarFormulario(d);
+            detenerScanner();
         } catch(e) {
-            alert('No se pudo parsear el QR: ' + decodedText);
+            alert('Formato de QR no reconocido. Escaneá el QR que aparece en la factura electrónica (generalmente contiene los datos del comprobante).');
+            detenerScanner();
         }
-        detenerScanner();
     }
+
     function onScanFailure(err) { console.warn(err); }
+
     function rellenarFormulario(d) {
         if (d.ruc) document.getElementById('ruc').value = d.ruc;
         if (d.nombre) document.getElementById('nombre').value = d.nombre;
@@ -499,10 +535,11 @@
         if (d.montoTotal) document.getElementById('montoTotal').value = d.montoTotal;
         if (d.tipoIVA) document.getElementById('tipoIVA').value = d.tipoIVA;
     }
+
     document.getElementById('btnIniciarScanner').addEventListener('click', iniciarScanner);
     document.getElementById('btnDetenerScanner').addEventListener('click', detenerScanner);
 
-    // OCR: cargar imagen y extraer datos
+    // ================== OCR ==================
     const inputFile = document.createElement('input');
     inputFile.type = 'file';
     inputFile.accept = 'image/*';
