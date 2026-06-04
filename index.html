@@ -81,6 +81,7 @@
             <button id="btnIniciarScanner">📷 Escanear QR</button>
             <button id="btnDetenerScanner" class="hidden">⏹️ Detener QR</button>
             <button id="btnAbrirOCR" class="btn-ocr">📸 Escanear factura (OCR)</button>
+            <button id="btnSubirFoto" class="btn-ocr">📤 Subir foto</button>   <!-- NUEVO BOTÓN -->
             <button id="btnNuevaFactura" class="btn-secondary">📝 Nueva manual</button>
         </div>
         <div id="reader"></div>
@@ -478,7 +479,6 @@
         document.getElementById('btnDetenerScanner').classList.add('hidden');
     }
 
-    // Función para decodificar base64 (URL-safe)
     function decodeBase64Safe(str) {
         try {
             let base64 = str.replace(/-/g, '+').replace(/_/g, '/');
@@ -488,21 +488,16 @@
         } catch(e) { return null; }
     }
 
-    // Función para extraer datos desde un texto plano (fallback para QR)
     function extraerDatosDeTexto(texto) {
         const d = {};
         const txt = texto.replace(/\s+/g, ' ').trim();
-        // RUC
         let rucMatch = txt.match(/\b(\d{6,8}\s*-\s*\d)\b/);
         if (!rucMatch) rucMatch = txt.match(/(\d{6,8})\s*[-–]\s*(\d)/);
         if (rucMatch) d.ruc = rucMatch[1].replace(/\s/g, '') + (rucMatch[2] ? '-' + rucMatch[2] : '');
-        // Timbrado (8 dígitos)
         let timbMatch = txt.match(/\b(\d{8})\b/);
         if (timbMatch) d.timbrado = timbMatch[1];
-        // Número comprobante
         let nroMatch = txt.match(/\b(\d{3,4}[-]\d{3,4}[-]\d{4,10})\b/);
         if (nroMatch) d.numeroComprobante = nroMatch[1];
-        // Fecha
         let fechaMatch = txt.match(/(\d{2}\/\d{2}\/\d{4})/);
         if (!fechaMatch) fechaMatch = txt.match(/(\d{4}-\d{2}-\d{2})/);
         if (fechaMatch) {
@@ -511,17 +506,14 @@
                 d.fecha = `${año}-${mes}-${día}`;
             } else d.fecha = fechaMatch[1];
         }
-        // Monto
         let montoMatch = txt.match(/(?:TOTAL|Total)\s*:?\s*(?:Gs\.?|\u20B2)?\s*([\d]{1,3}(?:[\.\s][\d]{3})*(?:[,\\.]\d{2})?)/i);
         if (!montoMatch) montoMatch = txt.match(/\b(\d{1,3}(?:[\.\s]\d{3})*[,\\.]\d{2})\b/);
         if (montoMatch) {
             let montoStr = montoMatch[1].replace(/\s/g, '').replace(/\./g, '').replace(',', '.');
             d.montoTotal = parseFloat(montoStr);
         }
-        // Nombre (entre RUC y Timbrado o después de "Proveedor:")
         let nombreMatch = txt.match(/(?:RAZON SOCIAL|NOMBRE|PROVEEDOR)[:\s]*([A-ZÁÉÍÓÚÑ\s]+?)(?=\s*(?:TIMBRADO|RUC|FECHA|TOTAL))/i);
         if (nombreMatch) d.nombre = nombreMatch[1].trim();
-        // IVA
         if (txt.includes('10%') || txt.includes('10 %')) d.tipoIVA = '10';
         else if (txt.includes('5%') || txt.includes('5 %')) d.tipoIVA = '5';
         else if (txt.includes('EXENTO') || txt.includes('exento')) d.tipoIVA = '0';
@@ -534,7 +526,6 @@
         let extraccionExitosa = false;
         let datos = {};
 
-        // Caso 1: URL de SET (ekuatia)
         if (decodedText.includes('ekuatia.set.gov.py')) {
             try {
                 const url = new URL(decodedText);
@@ -543,7 +534,6 @@
                     let jsonStr = decodeBase64Safe(param);
                     if (jsonStr) {
                         let factura = JSON.parse(jsonStr);
-                        // Mapeo flexible
                         datos.ruc = factura.ruc_proveedor || factura.ruc || factura.RUC;
                         datos.nombre = factura.razon_social_proveedor || factura.razonSocial || factura.nombre;
                         datos.timbrado = factura.timbrado;
@@ -560,7 +550,6 @@
             } catch(e) { console.error("Error parsing SET QR", e); }
         }
 
-        // Caso 2: JSON directo
         if (!extraccionExitosa) {
             try {
                 const json = JSON.parse(decodedText);
@@ -575,7 +564,6 @@
             } catch(e) {}
         }
 
-        // Caso 3: extracción por regex (fallback)
         if (!extraccionExitosa) {
             datos = extraerDatosDeTexto(decodedText);
             extraccionExitosa = datos.ruc && datos.montoTotal;
@@ -585,7 +573,6 @@
             rellenarFormulario(datos);
             detenerScanner();
         } else {
-            // Mostrar área de depuración para que el usuario edite manualmente
             const qrDebugBox = document.getElementById('qrDebugBox');
             const qrDebugText = document.getElementById('qrDebugText');
             qrDebugText.value = decodedText;
@@ -626,7 +613,7 @@
     document.getElementById('btnIniciarScanner').addEventListener('click', iniciarScanner);
     document.getElementById('btnDetenerScanner').addEventListener('click', detenerScanner);
 
-    // ================== OCR MEJORADO ==================
+    // ================== OCR (compartido para ambos botones) ==================
     const inputFile = document.createElement('input');
     inputFile.type = 'file';
     inputFile.accept = 'image/*';
@@ -634,10 +621,7 @@
     inputFile.style.display = 'none';
     document.body.appendChild(inputFile);
 
-    document.getElementById('btnAbrirOCR').addEventListener('click', () => inputFile.click());
-
-    inputFile.addEventListener('change', async (e) => {
-        const file = e.target.files[0];
+    function procesarImagen(file) {
         if (!file) return;
         const reader = new FileReader();
         reader.onload = (ev) => {
@@ -646,21 +630,37 @@
             document.getElementById('estadoOCR').textContent = 'Procesando OCR...';
         };
         reader.readAsDataURL(file);
-        const { data: { text } } = await Tesseract.recognize(file, 'spa', {
+        Tesseract.recognize(file, 'spa', {
             logger: m => {
                 if (m.status === 'recognizing text') {
                     document.getElementById('estadoOCR').textContent = `OCR: ${Math.round(m.progress * 100)}%`;
                 }
             }
+        }).then(({ data: { text } }) => {
+            document.getElementById('textoOCR').value = text;
+            document.getElementById('estadoOCR').textContent = 'OCR completado. Revisá los datos extraídos.';
+            const datos = extraerDatosDeTexto(text);
+            rellenarFormulario(datos);
+            if (!datos.ruc || !datos.montoTotal) {
+                alert('No se pudieron extraer automáticamente todos los campos. Podés editar el texto OCR y presionar "Re-extraer datos".');
+            }
+        }).catch(err => {
+            console.error(err);
+            alert('Error al procesar OCR: ' + err.message);
         });
-        document.getElementById('textoOCR').value = text;
-        document.getElementById('estadoOCR').textContent = 'OCR completado. Revisá los datos extraídos.';
-        const datos = extraerDatosDeTexto(text);  // reutilizamos la misma función
-        rellenarFormulario(datos);
-        if (!datos.ruc || !datos.montoTotal) {
-            alert('No se pudieron extraer automáticamente todos los campos. Podés editar el texto OCR y presionar "Re-extraer datos".');
-        }
+    }
+
+    function abrirSelectorImagen() {
+        inputFile.click();
+    }
+
+    inputFile.addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        procesarImagen(file);
     });
+
+    document.getElementById('btnAbrirOCR').addEventListener('click', abrirSelectorImagen);
+    document.getElementById('btnSubirFoto').addEventListener('click', abrirSelectorImagen);  // NUEVO BOTÓN
 
     document.getElementById('btnReextraerOCR').addEventListener('click', () => {
         const texto = document.getElementById('textoOCR').value;
