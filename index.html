@@ -81,19 +81,17 @@
             <button id="btnIniciarScanner">📷 Escanear QR</button>
             <button id="btnDetenerScanner" class="hidden">⏹️ Detener QR</button>
             <button id="btnAbrirOCR" class="btn-ocr">📸 Escanear factura (OCR)</button>
-            <button id="btnSubirFoto" class="btn-ocr">📤 Subir foto</button>   <!-- NUEVO BOTÓN -->
+            <button id="btnSubirFoto" class="btn-ocr">📤 Subir foto</button>
             <button id="btnNuevaFactura" class="btn-secondary">📝 Nueva manual</button>
         </div>
         <div id="reader"></div>
         
-        <!-- Área de depuración para QR (aparece si falla la extracción) -->
         <div id="qrDebugBox" class="debug-box hidden">
             <label>🔍 Texto del QR (podés editarlo y reintentar):</label>
             <textarea id="qrDebugText" rows="3"></textarea>
             <button id="btnReextraerQR" class="btn-secondary">🔄 Reintentar extracción desde este texto</button>
         </div>
 
-        <!-- Área de OCR -->
         <div id="ocrPreview" class="hidden">
             <img id="imgOCR" src="" alt="Vista previa" style="max-width:100%">
             <p id="estadoOCR" class="mensaje info">Procesando...</p>
@@ -185,7 +183,6 @@
     let facturasListener = null;
     let scanner = null;
 
-    // ================== FUNCIONES AUXILIARES UI ==================
     function mostrarPantalla(id) {
         document.querySelectorAll('#pantallaLogin, #pantallaPendiente, #pantallaFacturas, #pantallaAdmin')
             .forEach(el => el.classList.add('hidden'));
@@ -201,7 +198,7 @@
         setTimeout(() => el.classList.add('hidden'), 4000);
     }
 
-    // ================== AUTENTICACIÓN Y REGISTRO ==================
+    // ================== AUTENTICACIÓN ==================
     document.getElementById('btnLogin').addEventListener('click', async () => {
         const email = document.getElementById('loginEmail').value.trim();
         const pass = document.getElementById('loginPassword').value;
@@ -239,7 +236,7 @@
             let mensajeError = error.message;
             if (mensajeError.includes('email-already-in-use')) mensajeError = 'Este correo ya está registrado.';
             else if (mensajeError.includes('weak-password')) mensajeError = 'Contraseña muy débil. Usa al menos 6 caracteres.';
-            else if (mensajeError.includes('permission-denied')) mensajeError = 'Error de permisos. El administrador debe ajustar las reglas de Firestore.';
+            else if (mensajeError.includes('permission-denied')) mensajeError = 'Error de permisos.';
             mostrarMensaje('mensajeLogin', '❌ Error: ' + mensajeError, 'error');
         }
     });
@@ -285,7 +282,7 @@
         }
     });
 
-    // ================== PANEL ADMINISTRADOR ==================
+    // ================== PANEL ADMIN ==================
     async function cargarPanelAdmin() {
         const tbody = document.getElementById('cuerpoUsuarios');
         tbody.innerHTML = '';
@@ -309,7 +306,7 @@
                 tbody.appendChild(tr);
             });
         } catch (e) {
-            mostrarMensaje('mensajeAdmin', 'Error al cargar usuarios: ' + e.message, 'error');
+            mostrarMensaje('mensajeAdmin', 'Error: ' + e.message, 'error');
         }
     }
 
@@ -334,7 +331,7 @@
     };
 
     window.eliminarUsuario = async (uid) => {
-        if (!confirm('¿Eliminar este usuario? Se borrarán sus datos y también sus facturas.')) return;
+        if (!confirm('¿Eliminar este usuario?')) return;
         try {
             await db.collection('usuarios').doc(uid).delete();
             const facturasSnapshot = await db.collection('facturas').where('uid', '==', uid).get();
@@ -353,7 +350,7 @@
         mostrarMensaje('mensajeAdmin', 'Lista actualizada', 'exito');
     });
 
-    // ================== CRUD DE FACTURAS ==================
+    // ================== FACTURAS ==================
     function cargarFacturasFirestore() {
         if (facturasListener) facturasListener();
         facturasListener = db.collection('facturas')
@@ -468,7 +465,7 @@
     document.getElementById('btnCancelarEdicion').addEventListener('click', limpiarFormulario);
     document.getElementById('btnNuevaFactura').addEventListener('click', limpiarFormulario);
 
-    // ================== QR (con fallback editable) ==================
+    // ================== QR ==================
     function iniciarScanner() {
         if (!scanner) scanner = new Html5Qrcode("reader");
         scanner.start({ facingMode: "environment" }, { fps: 10, qrbox: 250 }, onScanSuccess, onScanFailure);
@@ -613,13 +610,21 @@
     document.getElementById('btnIniciarScanner').addEventListener('click', iniciarScanner);
     document.getElementById('btnDetenerScanner').addEventListener('click', detenerScanner);
 
-    // ================== OCR (compartido para ambos botones) ==================
-    const inputFile = document.createElement('input');
-    inputFile.type = 'file';
-    inputFile.accept = 'image/*';
-    inputFile.capture = 'environment';
-    inputFile.style.display = 'none';
-    document.body.appendChild(inputFile);
+    // ================== OCR (dos botones diferenciados) ==================
+    // Botón "Escanear factura (OCR)" - usa cámara
+    const cameraInput = document.createElement('input');
+    cameraInput.type = 'file';
+    cameraInput.accept = 'image/*';
+    cameraInput.capture = 'environment';
+    cameraInput.style.display = 'none';
+    document.body.appendChild(cameraInput);
+
+    // Botón "Subir foto" - solo galería (sin capture)
+    const galleryInput = document.createElement('input');
+    galleryInput.type = 'file';
+    galleryInput.accept = 'image/*';
+    galleryInput.style.display = 'none';
+    document.body.appendChild(galleryInput);
 
     function procesarImagen(file) {
         if (!file) return;
@@ -650,17 +655,20 @@
         });
     }
 
-    function abrirSelectorImagen() {
-        inputFile.click();
-    }
-
-    inputFile.addEventListener('change', (e) => {
+    cameraInput.addEventListener('change', (e) => {
         const file = e.target.files[0];
         procesarImagen(file);
+        cameraInput.value = ''; // permitir reseleccionar el mismo archivo
     });
 
-    document.getElementById('btnAbrirOCR').addEventListener('click', abrirSelectorImagen);
-    document.getElementById('btnSubirFoto').addEventListener('click', abrirSelectorImagen);  // NUEVO BOTÓN
+    galleryInput.addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        procesarImagen(file);
+        galleryInput.value = '';
+    });
+
+    document.getElementById('btnAbrirOCR').addEventListener('click', () => cameraInput.click());
+    document.getElementById('btnSubirFoto').addEventListener('click', () => galleryInput.click());
 
     document.getElementById('btnReextraerOCR').addEventListener('click', () => {
         const texto = document.getElementById('textoOCR').value;
