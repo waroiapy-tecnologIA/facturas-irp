@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Facturas IRP - Sistema Profesional (Corregido)</title>
+    <title>Facturas IRP - App Multiusuario</title>
     <!-- Firebase -->
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
@@ -16,7 +16,7 @@
     <style>
         * { box-sizing: border-box; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
         body { margin: 0; padding: 15px; background: #f0f4f8; color: #333; }
-        .container { max-width: 1000px; margin: 0 auto; background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+        .container { max-width: 900px; margin: 0 auto; background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
         h1, h2, h3 { color: #1e3a5f; }
         button { background: #1e3a5f; color: white; border: none; padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: 15px; margin: 3px; }
         button:disabled { background: #ccc; cursor: not-allowed; }
@@ -39,18 +39,9 @@
         .mensaje.exito { background: #d4edda; color: #155724; }
         .mensaje.error { background: #f8d7da; color: #721c24; }
         .mensaje.info { background: #d1ecf1; color: #0c5460; }
-        .ocr-raw-box { background: #f9f9f9; border: 1px solid #ccc; padding: 10px; margin: 10px 0; border-radius: 6px; }
+        .debug-box { background: #f9f9f9; border: 1px solid #ccc; padding: 10px; margin: 10px 0; border-radius: 6px; }
+        .debug-box textarea { font-family: monospace; font-size: 12px; }
         .export-section, .config-box { background: #e8f0fe; padding: 15px; border-radius: 8px; margin-top: 20px; }
-        .param-ocr { background: #fff3e0; padding: 15px; margin-top: 10px; border-radius: 8px; display: flex; flex-wrap: wrap; gap: 15px; align-items: center; }
-        .param-ocr label { margin-right: 5px; }
-        .param-ocr input { width: 70px; }
-        canvas.prepro { border: 1px solid #ccc; max-width: 100%; margin-top: 10px; }
-        .flex-row { display: flex; gap: 20px; flex-wrap: wrap; }
-        .flex-col { flex: 1; }
-        @media (max-width: 700px) {
-            .tabla-facturas, .tabla-usuarios { font-size: 12px; }
-            button { padding: 6px 10px; font-size: 12px; }
-        }
     </style>
 </head>
 <body>
@@ -75,58 +66,47 @@
         <div id="mensajeLogin" class="mensaje hidden"></div>
     </div>
 
-    <!-- Pantalla de espera -->
+    <!-- Pantalla de espera (pendiente de aprobación) -->
     <div id="pantallaPendiente" class="hidden">
         <h2>⏳ Cuenta pendiente de aprobación</h2>
-        <p>Tu cuenta fue creada, pero necesitás que el administrador la apruebe.</p>
+        <p>Tu cuenta fue creada, pero necesitás que el administrador la apruebe. Te avisaremos cuando esté activa.</p>
         <button id="btnLogoutPendiente">Cerrar sesión</button>
     </div>
 
-    <!-- Pantalla principal -->
+    <!-- Pantalla principal de facturas (usuario aprobado) -->
     <div id="pantallaFacturas" class="hidden">
         <h1>🧾 Mis Facturas IRP</h1>
         <button id="btnLogout" style="float:right;">Cerrar sesión</button>
         <div class="acciones">
             <button id="btnIniciarScanner">📷 Escanear QR</button>
             <button id="btnDetenerScanner" class="hidden">⏹️ Detener QR</button>
-            <button id="btnAbrirOCR" class="btn-ocr">📸 OCR Profesional</button>
+            <button id="btnAbrirOCR" class="btn-ocr">📸 Escanear factura (OCR)</button>
             <button id="btnNuevaFactura" class="btn-secondary">📝 Nueva manual</button>
         </div>
         <div id="reader"></div>
+        
+        <!-- Área de depuración para QR (aparece si falla la extracción) -->
+        <div id="qrDebugBox" class="debug-box hidden">
+            <label>🔍 Texto del QR (podés editarlo y reintentar):</label>
+            <textarea id="qrDebugText" rows="3"></textarea>
+            <button id="btnReextraerQR" class="btn-secondary">🔄 Reintentar extracción desde este texto</button>
+        </div>
 
-        <!-- Panel OCR mejorado con previsualización -->
+        <!-- Área de OCR -->
         <div id="ocrPreview" class="hidden">
-            <h3>🔍 OCR con preprocesamiento interactivo</h3>
-            <div class="flex-row">
-                <div class="flex-col">
-                    <img id="imgOCR" src="" alt="Original" style="max-width:100%; border:1px solid #ccc;">
-                </div>
-                <div class="flex-col">
-                    <canvas id="canvasPrepro" class="prepro"></canvas>
-                </div>
-            </div>
-            <div class="param-ocr">
-                <label>Escala: </label><input type="range" id="escalaSlider" min="1" max="4" step="0.5" value="2"> <span id="escalaVal">2</span>x
-                <label>Umbral: </label><input type="range" id="umbralSlider" min="0" max="255" value="120"> <span id="umbralVal">120</span>
-                <button id="btnAplicarPrepro" class="btn-secondary">Aplicar y reconocer</button>
-                <button id="btnAutoOCR" class="btn-success">OCR Automático (recomendado)</button>
-            </div>
-            <div class="ocr-raw-box">
-                <label>📄 Texto reconocido (editá si es necesario):</label>
-                <textarea id="textoOCR" rows="5" placeholder="El texto aparecerá aquí..."></textarea>
-                <div class="acciones">
-                    <button id="btnExtraerDatos" class="btn-secondary">📌 Extraer datos a formulario</button>
-                    <button id="btnVerTextoCompleto" class="btn-secondary">📄 Ver texto completo</button>
-                </div>
-                <p class="mensaje info">💡 <strong>Consejo:</strong> Si la extracción automática falla, corregí el texto manualmente y luego hacé clic en "Extraer datos".</p>
+            <img id="imgOCR" src="" alt="Vista previa" style="max-width:100%">
+            <p id="estadoOCR" class="mensaje info">Procesando...</p>
+            <div class="debug-box">
+                <label>📝 Texto reconocido (editá si es necesario):</label>
+                <textarea id="textoOCR" rows="4"></textarea>
+                <button id="btnReextraerOCR" class="btn-secondary">🔄 Re-extraer datos</button>
             </div>
         </div>
 
-        <!-- Formulario -->
         <h2>📄 <span id="modoFormulario">Agregar</span> factura</h2>
         <form id="formFactura">
             <input type="hidden" id="docIdEdicion" value="">
-            <div class="form-group"><label>RUC proveedor *</label><input type="text" id="ruc" required placeholder="123456-1"></div>
+            <div class="form-group"><label>RUC proveedor *</label><input type="text" id="ruc" required></div>
             <div class="form-group"><label>Nombre o razón social *</label><input type="text" id="nombre" required></div>
             <div class="form-group"><label>Tipo de comprobante *</label>
                 <select id="tipoComprobante"><option value="1">Factura</option><option value="2">Recibo</option><option value="3">Autofactura</option><option value="4">Nota de crédito</option><option value="5">Nota de débito</option></select>
@@ -145,14 +125,12 @@
             <button type="button" id="btnCancelarEdicion" class="hidden btn-secondary">❌ Cancelar</button>
         </form>
 
-        <!-- Tabla facturas -->
         <h2>📋 Facturas (<span id="contador">0</span>)</h2>
         <table class="tabla-facturas">
-            <thead><tr><th>RUC</th><th>Proveedor</th><th>Tipo</th><th>Fecha</th><th>Nro.</th><th>Monto</th><th>IVA</th><th>Estado</th><th>Acciones</th></tr></thead>
+            <thead><tr><th>RUC</th><th>Proveedor</th><th>Fecha</th><th>Nro.</th><th>Monto</th><th>IVA</th><th>Estado</th><th>Acciones</th></tr></thead>
             <tbody id="cuerpoTabla"></tbody>
         </table>
 
-        <!-- Configuración exportación -->
         <div class="config-box">
             <h3>⚙️ Códigos fijos para exportación</h3>
             <label>Tipo registro <input type="text" id="cfgTipoRegistro" value="1" size="3"></label>
@@ -162,24 +140,25 @@
             <label>Imputa IRP <input type="text" id="cfgImputaIRP" value="1" size="3"></label>
             <label>No imputa <input type="text" id="cfgNoImputa" value="0" size="3"></label>
         </div>
+
         <div class="export-section">
             <h2>📤 Exportar ZIP para Marangatu</h2>
             <label>Tu RUC sin DV <input type="text" id="miRUC"></label>
             <label>Periodo (AAAAMM) <input type="text" id="periodo" value="202606"></label>
             <label>Versión <input type="text" id="versionID" value="1"></label>
             <label><input type="checkbox" id="incluirImputadas"> Incluir facturas ya imputadas</label>
-            <button id="btnExportar" class="btn-success">📦 Generar ZIP</button>
+            <button id="btnExportar" class="btn-success">📦 Generar y descargar ZIP</button>
         </div>
     </div>
 
-    <!-- Panel admin -->
+    <!-- Pantalla de administrador -->
     <div id="pantallaAdmin" class="hidden">
         <h1>🛡️ Panel de Administrador</h1>
         <button id="btnLogoutAdmin" style="float:right;">Cerrar sesión</button>
-        <button id="btnRefrescarAdmin" class="btn-secondary">🔄 Refrescar</button>
-        <h2>Usuarios</h2>
+        <button id="btnRefrescarAdmin" class="btn-secondary" style="margin-bottom:10px;">🔄 Refrescar lista</button>
+        <h2>Usuarios registrados</h2>
         <table class="tabla-usuarios">
-            <thead><tr><th>Email</th><th>Estado</th><th>Rol</th><th>Acciones</th></tr></thead>
+            <thead><tr><th>Email</th><th>Estado</th><th>Rol</th><th>Acciones</th></thead>
             <tbody id="cuerpoUsuarios"></tbody>
         </table>
         <div id="mensajeAdmin" class="mensaje hidden"></div>
@@ -204,16 +183,14 @@
     let facturas = [];
     let facturasListener = null;
     let scanner = null;
-    let currentImageBlob = null;
-    let currentFile = null;
-    let currentPreproBlob = null;
 
-    // ================== FUNCIONES UI ==================
+    // ================== FUNCIONES AUXILIARES UI ==================
     function mostrarPantalla(id) {
         document.querySelectorAll('#pantallaLogin, #pantallaPendiente, #pantallaFacturas, #pantallaAdmin')
             .forEach(el => el.classList.add('hidden'));
         document.getElementById(id).classList.remove('hidden');
     }
+
     function mostrarMensaje(elementoId, texto, tipo) {
         const el = document.getElementById(elementoId);
         if (!el) return;
@@ -223,123 +200,236 @@
         setTimeout(() => el.classList.add('hidden'), 4000);
     }
 
-    // ================== AUTENTICACIÓN ==================
+    // ================== AUTENTICACIÓN Y REGISTRO ==================
     document.getElementById('btnLogin').addEventListener('click', async () => {
         const email = document.getElementById('loginEmail').value.trim();
         const pass = document.getElementById('loginPassword').value;
-        try { await auth.signInWithEmailAndPassword(email, pass); } catch (e) { mostrarMensaje('mensajeLogin', 'Error: '+e.message, 'error'); }
+        try {
+            await auth.signInWithEmailAndPassword(email, pass);
+        } catch (e) {
+            mostrarMensaje('mensajeLogin', 'Error: ' + e.message, 'error');
+        }
     });
+
     document.getElementById('btnRegistro').addEventListener('click', async () => {
         const email = document.getElementById('regEmail').value.trim();
         const pass = document.getElementById('regPassword').value;
-        if (pass.length<6) return mostrarMensaje('mensajeLogin', 'Contraseña mín. 6 caracteres.', 'error');
+        if (pass.length < 6) {
+            mostrarMensaje('mensajeLogin', 'La contraseña debe tener al menos 6 caracteres.', 'error');
+            return;
+        }
+        mostrarMensaje('mensajeLogin', 'Creando cuenta...', 'info');
         try {
             const cred = await auth.createUserWithEmailAndPassword(email, pass);
-            await db.collection('usuarios').doc(cred.user.uid).set({ email, estado: 'pendiente', fechaRegistro: new Date() });
-            mostrarMensaje('mensajeLogin', 'Cuenta creada. Esperá aprobación.', 'exito');
+            const uid = cred.user.uid;
+            await db.collection('usuarios').doc(uid).set({
+                email: email,
+                estado: 'pendiente',
+                fechaRegistro: new Date()
+            });
+            mostrarMensaje('mensajeLogin', '✅ Cuenta creada. Esperá la aprobación del administrador.', 'exito');
             await auth.signOut();
+            document.getElementById('regEmail').value = '';
+            document.getElementById('regPassword').value = '';
             document.getElementById('formRegistro').classList.add('hidden');
             document.getElementById('formLogin').classList.remove('hidden');
-        } catch(e) { mostrarMensaje('mensajeLogin', 'Error: '+e.message, 'error'); }
+        } catch (error) {
+            console.error(error);
+            let mensajeError = error.message;
+            if (mensajeError.includes('email-already-in-use')) mensajeError = 'Este correo ya está registrado.';
+            else if (mensajeError.includes('weak-password')) mensajeError = 'Contraseña muy débil. Usa al menos 6 caracteres.';
+            else if (mensajeError.includes('permission-denied')) mensajeError = 'Error de permisos. El administrador debe ajustar las reglas de Firestore.';
+            mostrarMensaje('mensajeLogin', '❌ Error: ' + mensajeError, 'error');
+        }
     });
-    document.getElementById('linkRegistro').addEventListener('click', (e) => { e.preventDefault(); document.getElementById('formLogin').classList.add('hidden'); document.getElementById('formRegistro').classList.remove('hidden'); });
-    document.getElementById('linkLogin').addEventListener('click', (e) => { e.preventDefault(); document.getElementById('formRegistro').classList.add('hidden'); document.getElementById('formLogin').classList.remove('hidden'); });
-    async function logout() { if(scanner) try{ await scanner.stop(); }catch(e){} scanner=null; await auth.signOut(); }
+
+    document.getElementById('linkRegistro').addEventListener('click', (e) => {
+        e.preventDefault();
+        document.getElementById('formLogin').classList.add('hidden');
+        document.getElementById('formRegistro').classList.remove('hidden');
+    });
+    document.getElementById('linkLogin').addEventListener('click', (e) => {
+        e.preventDefault();
+        document.getElementById('formRegistro').classList.add('hidden');
+        document.getElementById('formLogin').classList.remove('hidden');
+    });
+
+    function logout() { auth.signOut(); }
     document.getElementById('btnLogout').addEventListener('click', logout);
     document.getElementById('btnLogoutPendiente').addEventListener('click', logout);
     document.getElementById('btnLogoutAdmin').addEventListener('click', logout);
 
     auth.onAuthStateChanged(async (user) => {
         usuarioActual = user;
-        if(user){
+        if (user) {
             const userDoc = await db.collection('usuarios').doc(user.uid).get();
             const userData = userDoc.exists ? userDoc.data() : null;
-            if(userData && userData.rol === 'admin') { mostrarPantalla('pantallaAdmin'); cargarPanelAdmin(); return; }
-            if(!userData || userData.estado !== 'activo') mostrarPantalla('pantallaPendiente');
-            else { mostrarPantalla('pantallaFacturas'); cargarFacturasFirestore(); }
+            const esAdmin = userData && userData.rol === 'admin';
+            if (esAdmin) {
+                mostrarPantalla('pantallaAdmin');
+                cargarPanelAdmin();
+                return;
+            }
+            if (!userData || userData.estado !== 'activo') {
+                mostrarPantalla('pantallaPendiente');
+            } else {
+                mostrarPantalla('pantallaFacturas');
+                cargarFacturasFirestore();
+            }
         } else {
-            if(facturasListener) facturasListener();
-            if(scanner) try{ await scanner.stop(); }catch(e){}
+            if (facturasListener) facturasListener();
             mostrarPantalla('pantallaLogin');
+            document.getElementById('formLogin').classList.remove('hidden');
+            document.getElementById('formRegistro').classList.add('hidden');
         }
     });
 
-    // ================== ADMIN ==================
+    // ================== PANEL ADMINISTRADOR ==================
     async function cargarPanelAdmin() {
         const tbody = document.getElementById('cuerpoUsuarios');
         tbody.innerHTML = '';
-        const snapshot = await db.collection('usuarios').orderBy('email').get();
-        snapshot.forEach(doc => {
-            const data = doc.data();
-            const tr = document.createElement('tr');
-            tr.innerHTML = `<td>${data.email}</td><td>${data.estado||'pendiente'}</td><td>${data.rol||'usuario'}</td>
-            <td>${data.estado!=='activo'?`<button class="btn-success" onclick="cambiarEstado('${doc.id}','activo')">Aprobar</button>`:''}
-                ${data.estado==='activo'?`<button class="btn-danger" onclick="cambiarEstado('${doc.id}','suspendido')">Suspender</button>`:''}
-                ${data.estado==='suspendido'?`<button class="btn-success" onclick="cambiarEstado('${doc.id}','activo')">Reactivar</button>`:''}
-                <button class="btn-secondary" onclick="cambiarRol('${doc.id}','admin')">Hacer Admin</button>
-                <button class="btn-danger" onclick="eliminarUser('${doc.id}')">Eliminar</button></td>`;
-            tbody.appendChild(tr);
-        });
+        try {
+            const snapshot = await db.collection('usuarios').orderBy('email').get();
+            snapshot.forEach(doc => {
+                const data = doc.data();
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td>${data.email}</td>
+                    <td>${data.estado || 'pendiente'}</td>
+                    <td>${data.rol || 'usuario'}</td>
+                    <td>
+                        ${data.estado !== 'activo' ? `<button class="btn-success" onclick="cambiarEstadoUsuario('${doc.id}', 'activo')">Aprobar</button>` : ''}
+                        ${data.estado === 'activo' ? `<button class="btn-danger" onclick="cambiarEstadoUsuario('${doc.id}', 'suspendido')">Suspender</button>` : ''}
+                        ${data.estado === 'suspendido' ? `<button class="btn-success" onclick="cambiarEstadoUsuario('${doc.id}', 'activo')">Reactivar</button>` : ''}
+                        <button class="btn-secondary" onclick="cambiarRolUsuario('${doc.id}', 'admin')">Hacer Admin</button>
+                        <button class="btn-danger" onclick="eliminarUsuario('${doc.id}')">🗑️ Eliminar</button>
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            });
+        } catch (e) {
+            mostrarMensaje('mensajeAdmin', 'Error al cargar usuarios: ' + e.message, 'error');
+        }
     }
-    window.cambiarEstado = async (uid, estado) => { await db.collection('usuarios').doc(uid).update({ estado }); cargarPanelAdmin(); };
-    window.cambiarRol = async (uid, rol) => { await db.collection('usuarios').doc(uid).update({ rol }); cargarPanelAdmin(); };
-    window.eliminarUser = async (uid) => {
-        if(!confirm('¿Eliminar usuario y sus facturas?')) return;
-        await db.collection('usuarios').doc(uid).delete();
-        const factSnap = await db.collection('facturas').where('uid','==',uid).get();
-        const batch = db.batch();
-        factSnap.forEach(d => batch.delete(d.ref));
-        await batch.commit();
-        cargarPanelAdmin();
-    };
-    document.getElementById('btnRefrescarAdmin').addEventListener('click', cargarPanelAdmin);
 
-    // ================== CRUD FACTURAS ==================
+    window.cambiarEstadoUsuario = async (uid, nuevoEstado) => {
+        try {
+            await db.collection('usuarios').doc(uid).update({ estado: nuevoEstado });
+            mostrarMensaje('mensajeAdmin', `Usuario actualizado a ${nuevoEstado}.`, 'exito');
+            cargarPanelAdmin();
+        } catch (e) {
+            mostrarMensaje('mensajeAdmin', 'Error: ' + e.message, 'error');
+        }
+    };
+
+    window.cambiarRolUsuario = async (uid, nuevoRol) => {
+        try {
+            await db.collection('usuarios').doc(uid).update({ rol: nuevoRol });
+            mostrarMensaje('mensajeAdmin', `Rol actualizado a ${nuevoRol}.`, 'exito');
+            cargarPanelAdmin();
+        } catch (e) {
+            mostrarMensaje('mensajeAdmin', 'Error: ' + e.message, 'error');
+        }
+    };
+
+    window.eliminarUsuario = async (uid) => {
+        if (!confirm('¿Eliminar este usuario? Se borrarán sus datos y también sus facturas.')) return;
+        try {
+            await db.collection('usuarios').doc(uid).delete();
+            const facturasSnapshot = await db.collection('facturas').where('uid', '==', uid).get();
+            const batch = db.batch();
+            facturasSnapshot.forEach(doc => batch.delete(doc.ref));
+            await batch.commit();
+            mostrarMensaje('mensajeAdmin', 'Usuario y facturas eliminados.', 'exito');
+            cargarPanelAdmin();
+        } catch (e) {
+            mostrarMensaje('mensajeAdmin', 'Error: ' + e.message, 'error');
+        }
+    };
+
+    document.getElementById('btnRefrescarAdmin').addEventListener('click', () => {
+        cargarPanelAdmin();
+        mostrarMensaje('mensajeAdmin', 'Lista actualizada', 'exito');
+    });
+
+    // ================== CRUD DE FACTURAS ==================
     function cargarFacturasFirestore() {
-        if(facturasListener) facturasListener();
-        facturasListener = db.collection('facturas').where('uid','==',usuarioActual.uid).orderBy('fecha','desc').onSnapshot(snap=>{
-            facturas = []; snap.forEach(d=>facturas.push({id:d.id,...d.data()}));
-            actualizarTabla();
-        });
+        if (facturasListener) facturasListener();
+        facturasListener = db.collection('facturas')
+            .where('uid', '==', usuarioActual.uid)
+            .orderBy('fecha', 'desc')
+            .onSnapshot((snapshot) => {
+                facturas = [];
+                snapshot.forEach(doc => facturas.push({ id: doc.id, ...doc.data() }));
+                actualizarTablaFacturas();
+            }, (error) => console.error(error));
     }
-    function actualizarTabla() {
+
+    function actualizarTablaFacturas() {
         const tbody = document.getElementById('cuerpoTabla');
-        document.getElementById('contador').textContent = facturas.length;
+        const contador = document.getElementById('contador');
         tbody.innerHTML = '';
-        facturas.forEach(f=>{
-            const tipoTexto = {1:'Factura',2:'Recibo',3:'Autofactura',4:'Nota crédito',5:'Nota débito'}[f.tipoComprobante]||'';
+        facturas.forEach(f => {
             const tr = document.createElement('tr');
-            tr.innerHTML = `<td>${f.ruc||''}</td><td>${f.nombre||''}</td><td>${tipoTexto}</td><td>${f.fecha||''}</td>
-            <td>${f.numeroComprobante||''}</td><td>${(f.montoTotal||0).toLocaleString('es-PY')}</td>
-            <td>${f.tipoIVA==='10'?'10%':f.tipoIVA==='5'?'5%':'Exento'}</td>
-            <td>${f.imputada?'✅ Imputada':'⏳ Pendiente'}</td>
-            <td><button class="btn-edit" onclick="editar('${f.id}')">✏️</button>
-                <button class="btn-danger" onclick="eliminar('${f.id}')">🗑️</button>
-                <button class="${f.imputada?'btn-pendiente':'btn-imputada'}" onclick="toggleImp('${f.id}')">${f.imputada?'Desmarcar':'Marcar imputada'}</button></td>`;
+            const estadoIcono = f.imputada ? '✅' : '⏳';
+            const estadoTexto = f.imputada ? 'Imputada' : 'Pendiente';
+            tr.innerHTML = `
+                <td>${f.ruc || ''}</td>
+                <td>${f.nombre || ''}</td>
+                <td>${f.fecha || ''}</td>
+                <td>${f.numeroComprobante || ''}</td>
+                <td>${parseFloat(f.montoTotal || 0).toLocaleString('es-PY')}</td>
+                <td>${f.tipoIVA === '10' ? '10%' : f.tipoIVA === '5' ? '5%' : 'Exento'}</td>
+                <td>${estadoIcono} ${estadoTexto}</td>
+                <td>
+                    <button class="btn-edit" onclick="editarFactura('${f.id}')">✏️</button>
+                    <button class="btn-danger" onclick="eliminarFactura('${f.id}')">🗑️</button>
+                    <button class="${f.imputada ? 'btn-pendiente' : 'btn-imputada'}" onclick="toggleImputada('${f.id}')">${f.imputada ? 'Desmarcar' : 'Marcar imputada'}</button>
+                 </td>
+            `;
             tbody.appendChild(tr);
         });
+        contador.textContent = facturas.length;
     }
-    window.editar = (id) => {
-        const f = facturas.find(f=>f.id===id);
-        if(!f) return;
+
+    window.editarFactura = (id) => {
+        const f = facturas.find(f => f.id === id);
+        if (!f) return;
         document.getElementById('docIdEdicion').value = id;
-        document.getElementById('ruc').value = f.ruc||'';
-        document.getElementById('nombre').value = f.nombre||'';
-        document.getElementById('tipoComprobante').value = f.tipoComprobante||'1';
-        document.getElementById('fecha').value = f.fecha||'';
-        document.getElementById('timbrado').value = f.timbrado||'';
-        document.getElementById('numeroComprobante').value = f.numeroComprobante||'';
-        document.getElementById('montoTotal').value = f.montoTotal||'';
-        document.getElementById('tipoIVA').value = f.tipoIVA||'10';
-        document.getElementById('condicionCompra').value = f.condicionCompra||'01';
+        document.getElementById('ruc').value = f.ruc || '';
+        document.getElementById('nombre').value = f.nombre || '';
+        document.getElementById('tipoComprobante').value = f.tipoComprobante || '1';
+        document.getElementById('fecha').value = f.fecha || '';
+        document.getElementById('timbrado').value = f.timbrado || '';
+        document.getElementById('numeroComprobante').value = f.numeroComprobante || '';
+        document.getElementById('montoTotal').value = f.montoTotal || '';
+        document.getElementById('tipoIVA').value = f.tipoIVA || '10';
+        document.getElementById('condicionCompra').value = f.condicionCompra || '01';
         document.getElementById('btnCancelarEdicion').classList.remove('hidden');
         document.getElementById('modoFormulario').innerText = 'Editar';
     };
-    window.eliminar = async (id) => { if(confirm('Eliminar?')) await db.collection('facturas').doc(id).delete(); };
-    window.toggleImp = async (id) => { const f = facturas.find(f=>f.id===id); if(f) await db.collection('facturas').doc(id).update({ imputada: !f.imputada }); };
-    
+
+    window.eliminarFactura = async (id) => {
+        if (!confirm('¿Eliminar esta factura?')) return;
+        try {
+            await db.collection('facturas').doc(id).delete();
+        } catch (e) {
+            mostrarMensaje('', 'Error al eliminar', 'error');
+        }
+    };
+
+    window.toggleImputada = async (id) => {
+        const factura = facturas.find(f => f.id === id);
+        if (!factura) return;
+        try {
+            await db.collection('facturas').doc(id).update({ imputada: !factura.imputada });
+        } catch (e) {
+            mostrarMensaje('', 'Error al actualizar', 'error');
+        }
+    };
+
     async function guardarFactura() {
-        const data = {
+        const facturaData = {
             ruc: document.getElementById('ruc').value.trim(),
             nombre: document.getElementById('nombre').value.trim(),
             tipoComprobante: document.getElementById('tipoComprobante').value,
@@ -351,314 +441,281 @@
             condicionCompra: document.getElementById('condicionCompra').value,
             imputada: false
         };
-        if(!data.ruc || !data.nombre || !data.fecha || !data.timbrado || !data.numeroComprobante || isNaN(data.montoTotal)) { mostrarMensaje('','Complete todos los campos','error'); return; }
         const docId = document.getElementById('docIdEdicion').value;
-        if(docId) await db.collection('facturas').doc(docId).update(data);
-        else await db.collection('facturas').add({...data, uid: usuarioActual.uid});
-        limpiarFormularioCompleto();
-        mostrarMensaje('','Factura guardada','exito');
+        try {
+            if (docId) {
+                await db.collection('facturas').doc(docId).update(facturaData);
+                mostrarMensaje('', 'Factura actualizada', 'exito');
+            } else {
+                await db.collection('facturas').add({ ...facturaData, uid: usuarioActual.uid });
+                mostrarMensaje('', 'Factura guardada', 'exito');
+            }
+            limpiarFormulario();
+        } catch (e) {
+            mostrarMensaje('', 'Error: ' + e.message, 'error');
+        }
     }
-    
-    function limpiarFormularioCompleto() {
+
+    function limpiarFormulario() {
         document.getElementById('formFactura').reset();
         document.getElementById('docIdEdicion').value = '';
         document.getElementById('btnCancelarEdicion').classList.add('hidden');
         document.getElementById('modoFormulario').innerText = 'Agregar';
     }
-    
-    function resetearModoEdicion() {
-        // Solo quita los flags de edición, NO resetea los valores del formulario
-        document.getElementById('docIdEdicion').value = '';
-        document.getElementById('btnCancelarEdicion').classList.add('hidden');
-        document.getElementById('modoFormulario').innerText = 'Agregar';
-    }
-    
-    document.getElementById('btnGuardar').addEventListener('click', guardarFactura);
-    document.getElementById('btnCancelarEdicion').addEventListener('click', limpiarFormularioCompleto);
-    document.getElementById('btnNuevaFactura').addEventListener('click', limpiarFormularioCompleto);
 
-    // ================== QR ==================
-    async function iniciarScanner() {
-        if(scanner) try{ await scanner.stop(); }catch(e){}
-        scanner = new Html5Qrcode("reader");
+    document.getElementById('btnGuardar').addEventListener('click', guardarFactura);
+    document.getElementById('btnCancelarEdicion').addEventListener('click', limpiarFormulario);
+    document.getElementById('btnNuevaFactura').addEventListener('click', limpiarFormulario);
+
+    // ================== QR (con fallback editable) ==================
+    function iniciarScanner() {
+        if (!scanner) scanner = new Html5Qrcode("reader");
+        scanner.start({ facingMode: "environment" }, { fps: 10, qrbox: 250 }, onScanSuccess, onScanFailure);
+        document.getElementById('btnDetenerScanner').classList.remove('hidden');
+    }
+    function detenerScanner() {
+        if (scanner) scanner.stop();
+        document.getElementById('btnDetenerScanner').classList.add('hidden');
+    }
+
+    // Función para decodificar base64 (URL-safe)
+    function decodeBase64Safe(str) {
         try {
-            await scanner.start({facingMode:"environment"},{fps:10,qrbox:250}, onScanSuccess, onScanFailure);
-            document.getElementById('btnDetenerScanner').classList.remove('hidden');
-        } catch(e){ alert("Error cámara: "+e); }
+            let base64 = str.replace(/-/g, '+').replace(/_/g, '/');
+            let decoded = atob(base64);
+            try { decoded = decodeURIComponent(escape(decoded)); } catch(e) {}
+            return decoded;
+        } catch(e) { return null; }
     }
-    async function detenerScanner() { if(scanner) try{ await scanner.stop(); }catch(e){} scanner=null; document.getElementById('btnDetenerScanner').classList.add('hidden'); }
-    function decodeBase64(str){ try{ let base64=str.replace(/-/g,'+').replace(/_/g,'/'); let decoded=atob(base64); try{ decoded=decodeURIComponent(escape(decoded)); }catch(e){} return decoded; }catch(e){ return null; } }
-    async function onScanSuccess(decodedText){
-        await detenerScanner();
-        if(decodedText.includes('ekuatia.set.gov.py')){
-            try{
-                const url=new URL(decodedText);
-                let dataParam=null;
-                for(let [k,v] of url.searchParams.entries()) if(v && v.length>30 && /^[A-Za-z0-9\-_=]+$/.test(v)){ dataParam=v; break; }
-                if(!dataParam) { alert('QR sin datos'); return; }
-                let jsonStr=decodeBase64(dataParam);
-                if(!jsonStr) { alert('Base64 inválido'); return; }
-                let factura=JSON.parse(jsonStr.replace(/[\x00-\x1F]/g,''));
-                const d={};
-                d.ruc=factura.ruc_proveedor||factura.ruc||factura.RUC;
-                d.nombre=factura.razon_social_proveedor||factura.razonSocial||factura.nombre;
-                d.timbrado=factura.timbrado||factura.Timbrado;
-                d.numeroComprobante=factura.numero_comprobante||factura.nro_comprobante||factura.numero;
-                d.fecha=factura.fecha_emision||factura.fechaEmision||factura.fecha;
-                d.montoTotal=factura.monto_total||factura.totalComprobante||factura.total;
-                if(factura.iva_porcentaje) d.tipoIVA=String(factura.iva_porcentaje);
-                else if(factura.monto_iva_10>0) d.tipoIVA='10';
-                else if(factura.monto_iva_5>0) d.tipoIVA='5';
-                else d.tipoIVA='0';
-                rellenarFormulario(d);
-            } catch(e){ alert('Error QR SET: '+e.message); }
-            return;
+
+    // Función para extraer datos desde un texto plano (fallback para QR)
+    function extraerDatosDeTexto(texto) {
+        const d = {};
+        const txt = texto.replace(/\s+/g, ' ').trim();
+        // RUC
+        let rucMatch = txt.match(/\b(\d{6,8}\s*-\s*\d)\b/);
+        if (!rucMatch) rucMatch = txt.match(/(\d{6,8})\s*[-–]\s*(\d)/);
+        if (rucMatch) d.ruc = rucMatch[1].replace(/\s/g, '') + (rucMatch[2] ? '-' + rucMatch[2] : '');
+        // Timbrado (8 dígitos)
+        let timbMatch = txt.match(/\b(\d{8})\b/);
+        if (timbMatch) d.timbrado = timbMatch[1];
+        // Número comprobante
+        let nroMatch = txt.match(/\b(\d{3,4}[-]\d{3,4}[-]\d{4,10})\b/);
+        if (nroMatch) d.numeroComprobante = nroMatch[1];
+        // Fecha
+        let fechaMatch = txt.match(/(\d{2}\/\d{2}\/\d{4})/);
+        if (!fechaMatch) fechaMatch = txt.match(/(\d{4}-\d{2}-\d{2})/);
+        if (fechaMatch) {
+            if (fechaMatch[1].includes('/')) {
+                let [día, mes, año] = fechaMatch[1].split('/');
+                d.fecha = `${año}-${mes}-${día}`;
+            } else d.fecha = fechaMatch[1];
         }
-        try{
-            const json=JSON.parse(decodedText);
-            rellenarFormulario({ ruc:json.ruc, nombre:json.nombre, timbrado:json.timbrado, numeroComprobante:json.numero, fecha:json.fecha, montoTotal:json.total, tipoIVA:json.iva });
-        } catch(e){ alert('Formato QR no reconocido'); }
+        // Monto
+        let montoMatch = txt.match(/(?:TOTAL|Total)\s*:?\s*(?:Gs\.?|\u20B2)?\s*([\d]{1,3}(?:[\.\s][\d]{3})*(?:[,\\.]\d{2})?)/i);
+        if (!montoMatch) montoMatch = txt.match(/\b(\d{1,3}(?:[\.\s]\d{3})*[,\\.]\d{2})\b/);
+        if (montoMatch) {
+            let montoStr = montoMatch[1].replace(/\s/g, '').replace(/\./g, '').replace(',', '.');
+            d.montoTotal = parseFloat(montoStr);
+        }
+        // Nombre (entre RUC y Timbrado o después de "Proveedor:")
+        let nombreMatch = txt.match(/(?:RAZON SOCIAL|NOMBRE|PROVEEDOR)[:\s]*([A-ZÁÉÍÓÚÑ\s]+?)(?=\s*(?:TIMBRADO|RUC|FECHA|TOTAL))/i);
+        if (nombreMatch) d.nombre = nombreMatch[1].trim();
+        // IVA
+        if (txt.includes('10%') || txt.includes('10 %')) d.tipoIVA = '10';
+        else if (txt.includes('5%') || txt.includes('5 %')) d.tipoIVA = '5';
+        else if (txt.includes('EXENTO') || txt.includes('exento')) d.tipoIVA = '0';
+        else d.tipoIVA = '10';
+        return d;
     }
-    function onScanFailure(err){}
+
+    function onScanSuccess(decodedText) {
+        console.log("QR escaneado:", decodedText);
+        let extraccionExitosa = false;
+        let datos = {};
+
+        // Caso 1: URL de SET (ekuatia)
+        if (decodedText.includes('ekuatia.set.gov.py')) {
+            try {
+                const url = new URL(decodedText);
+                let param = url.searchParams.get('p') || url.searchParams.get('d') || url.searchParams.get('data');
+                if (param) {
+                    let jsonStr = decodeBase64Safe(param);
+                    if (jsonStr) {
+                        let factura = JSON.parse(jsonStr);
+                        // Mapeo flexible
+                        datos.ruc = factura.ruc_proveedor || factura.ruc || factura.RUC;
+                        datos.nombre = factura.razon_social_proveedor || factura.razonSocial || factura.nombre;
+                        datos.timbrado = factura.timbrado;
+                        datos.numeroComprobante = factura.numero_comprobante || factura.nro_comprobante || factura.numero;
+                        datos.fecha = factura.fecha_emision || factura.fecha;
+                        datos.montoTotal = factura.monto_total || factura.total || factura.monto;
+                        if (factura.iva_porcentaje) datos.tipoIVA = String(factura.iva_porcentaje);
+                        else if (factura.iva === 10 || factura.iva === '10') datos.tipoIVA = '10';
+                        else if (factura.iva === 5 || factura.iva === '5') datos.tipoIVA = '5';
+                        else datos.tipoIVA = '0';
+                        extraccionExitosa = datos.ruc && datos.montoTotal;
+                    }
+                }
+            } catch(e) { console.error("Error parsing SET QR", e); }
+        }
+
+        // Caso 2: JSON directo
+        if (!extraccionExitosa) {
+            try {
+                const json = JSON.parse(decodedText);
+                datos.ruc = json.ruc || json.RUC;
+                datos.nombre = json.nombre || json.Nombre;
+                datos.timbrado = json.timbrado;
+                datos.numeroComprobante = json.numero || json.Numero;
+                datos.fecha = json.fecha || json.Fecha;
+                datos.montoTotal = json.monto || json.total;
+                datos.tipoIVA = json.iva || json.tipoIVA || '10';
+                extraccionExitosa = datos.ruc && datos.montoTotal;
+            } catch(e) {}
+        }
+
+        // Caso 3: extracción por regex (fallback)
+        if (!extraccionExitosa) {
+            datos = extraerDatosDeTexto(decodedText);
+            extraccionExitosa = datos.ruc && datos.montoTotal;
+        }
+
+        if (extraccionExitosa) {
+            rellenarFormulario(datos);
+            detenerScanner();
+        } else {
+            // Mostrar área de depuración para que el usuario edite manualmente
+            const qrDebugBox = document.getElementById('qrDebugBox');
+            const qrDebugText = document.getElementById('qrDebugText');
+            qrDebugText.value = decodedText;
+            qrDebugBox.classList.remove('hidden');
+            detenerScanner();
+            alert("No se pudieron extraer los datos automáticamente. Podés editar el texto del QR en el cuadro y presionar 'Reintentar'.");
+        }
+    }
+
+    function onScanFailure(err) { console.warn(err); }
+
+    document.getElementById('btnReextraerQR').addEventListener('click', () => {
+        const texto = document.getElementById('qrDebugText').value;
+        if (texto.trim()) {
+            const datos = extraerDatosDeTexto(texto);
+            if (datos.ruc && datos.montoTotal) {
+                rellenarFormulario(datos);
+                document.getElementById('qrDebugBox').classList.add('hidden');
+                alert("Datos extraídos correctamente.");
+            } else {
+                alert("No se pudieron extraer campos obligatorios (RUC o monto). Revisá el texto manualmente.");
+            }
+        } else {
+            alert("No hay texto para procesar.");
+        }
+    });
+
+    function rellenarFormulario(d) {
+        if (d.ruc) document.getElementById('ruc').value = d.ruc;
+        if (d.nombre) document.getElementById('nombre').value = d.nombre;
+        if (d.timbrado) document.getElementById('timbrado').value = d.timbrado;
+        if (d.numeroComprobante) document.getElementById('numeroComprobante').value = d.numeroComprobante;
+        if (d.fecha) document.getElementById('fecha').value = d.fecha;
+        if (d.montoTotal) document.getElementById('montoTotal').value = d.montoTotal;
+        if (d.tipoIVA) document.getElementById('tipoIVA').value = d.tipoIVA;
+    }
+
     document.getElementById('btnIniciarScanner').addEventListener('click', iniciarScanner);
     document.getElementById('btnDetenerScanner').addEventListener('click', detenerScanner);
 
-    // ================== OCR PROFESIONAL (CORREGIDO) ==================
-    async function preprocesarImagen(file, escala, umbral) {
-        return new Promise((resolve) => {
-            const img = new Image();
-            const url = URL.createObjectURL(file);
-            img.onload = () => {
-                const canvas = document.createElement('canvas');
-                const ctx = canvas.getContext('2d');
-                canvas.width = img.width * escala;
-                canvas.height = img.height * escala;
-                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-                const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-                const data = imageData.data;
-                for (let i=0; i<data.length; i+=4) {
-                    const gray = 0.299*data[i] + 0.587*data[i+1] + 0.114*data[i+2];
-                    const val = gray < umbral ? 0 : 255;
-                    data[i]=data[i+1]=data[i+2]=val;
-                }
-                ctx.putImageData(imageData, 0, 0);
-                const previewCanvas = document.getElementById('canvasPrepro');
-                previewCanvas.width = canvas.width;
-                previewCanvas.height = canvas.height;
-                previewCanvas.getContext('2d').drawImage(canvas, 0, 0);
-                canvas.toBlob(blob => { URL.revokeObjectURL(url); resolve(blob); }, 'image/png');
-            };
-            img.src = url;
-        });
-    }
+    // ================== OCR MEJORADO ==================
+    const inputFile = document.createElement('input');
+    inputFile.type = 'file';
+    inputFile.accept = 'image/*';
+    inputFile.capture = 'environment';
+    inputFile.style.display = 'none';
+    document.body.appendChild(inputFile);
 
-    async function extraerDatosConTesseract(blob) {
-        const result = await Tesseract.recognize(blob, 'spa', { 
-            logger: m => { if(m.status==='recognizing text') document.getElementById('estadoOCR').innerHTML = `OCR: ${Math.round(m.progress*100)}%`; },
-            tessedit_pageseg_mode: 6,
-            preserve_interword_spaces: 1
-        });
-        const text = result.data.text;
-        const words = result.data.words;
-        
-        function buscarValorPorEtiqueta(etiqueta, palabras, offsetX=150) {
-            for(let i=0; i<palabras.length; i++) {
-                if(palabras[i].text.toUpperCase().includes(etiqueta.toUpperCase())) {
-                    for(let j=i+1; j<palabras.length; j++) {
-                        if(palabras[j].bbox.x0 > palabras[i].bbox.x1 && palabras[j].bbox.x0 - palabras[i].bbox.x1 < offsetX) {
-                            return palabras[j].text;
-                        }
-                    }
+    document.getElementById('btnAbrirOCR').addEventListener('click', () => inputFile.click());
+
+    inputFile.addEventListener('change', async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+            document.getElementById('imgOCR').src = ev.target.result;
+            document.getElementById('ocrPreview').classList.remove('hidden');
+            document.getElementById('estadoOCR').textContent = 'Procesando OCR...';
+        };
+        reader.readAsDataURL(file);
+        const { data: { text } } = await Tesseract.recognize(file, 'spa', {
+            logger: m => {
+                if (m.status === 'recognizing text') {
+                    document.getElementById('estadoOCR').textContent = `OCR: ${Math.round(m.progress * 100)}%`;
                 }
             }
-            return null;
-        }
-        
-        const d = {};
-        let rucMatch = text.match(/\b(\d{6,8}-\d)\b/);
-        if(rucMatch) d.ruc = rucMatch[1];
-        if(!d.ruc) {
-            let rucVal = buscarValorPorEtiqueta('RUC', words) || buscarValorPorEtiqueta('R.U.C', words);
-            if(rucVal) {
-                let match = rucVal.match(/\d{6,8}-?\d/);
-                if(match) d.ruc = match[0].replace(/(\d{6,8})(\d)/, '$1-$2');
-            }
-        }
-        let fechaMatch = text.match(/\b(\d{2}\/\d{2}\/\d{4})\b/);
-        if(fechaMatch) d.fecha = fechaMatch[1].split('/').reverse().join('-');
-        let timbMatch = text.match(/\b(\d{8})\b/);
-        if(timbMatch) d.timbrado = timbMatch[1];
-        let nroMatch = text.match(/\b(\d{3,4}-\d{3,4}-\d{4,10})\b/);
-        if(nroMatch) d.numeroComprobante = nroMatch[1];
-        let montoMatch = text.match(/(?:Total|TOTAL)\D*(\d{1,3}(?:\.\d{3})*,\d{2})/);
-        if(montoMatch) {
-            let m = montoMatch[1].replace(/\./g,'').replace(',','.');
-            d.montoTotal = parseFloat(m);
-        }
-        if(d.ruc) {
-            let idx = text.indexOf(d.ruc);
-            if(idx>0) {
-                let antes = text.substring(0, idx);
-                let palabrasNombre = antes.split(/\s+/).filter(p => p.length>2 && !/^\d+$/.test(p));
-                if(palabrasNombre.length>2) d.nombre = palabrasNombre.slice(-4).join(' ');
-            }
-        }
-        return { text, d };
-    }
-    
-    async function actualizarPrevisualizacion() {
-        if(!currentFile) return;
-        const escala = parseFloat(document.getElementById('escalaSlider').value);
-        const umbral = parseInt(document.getElementById('umbralSlider').value);
-        document.getElementById('escalaVal').innerText = escala;
-        document.getElementById('umbralVal').innerText = umbral;
-        const blobProc = await preprocesarImagen(currentFile, escala, umbral);
-        currentPreproBlob = blobProc;
-    }
-    
-    async function ejecutarOCRyExtraer() {
-        if(!currentPreproBlob) {
-            if(!currentFile) { alert('Primero selecciona una imagen.'); return; }
-            await actualizarPrevisualizacion();
-        }
-        document.getElementById('estadoOCR').innerHTML = 'Reconociendo texto...';
-        const { text, d } = await extraerDatosConTesseract(currentPreproBlob);
+        });
         document.getElementById('textoOCR').value = text;
-        // Rellenar formulario sin resetear los valores (solo quitar modo edición)
-        if(d.ruc) document.getElementById('ruc').value = d.ruc;
-        if(d.nombre) document.getElementById('nombre').value = d.nombre;
-        if(d.timbrado) document.getElementById('timbrado').value = d.timbrado;
-        if(d.numeroComprobante) document.getElementById('numeroComprobante').value = d.numeroComprobante;
-        if(d.fecha) document.getElementById('fecha').value = d.fecha;
-        if(d.montoTotal) document.getElementById('montoTotal').value = d.montoTotal;
-        // Resetear solo modo edición (no los valores)
-        resetearModoEdicion();
-        document.getElementById('estadoOCR').innerHTML = 'OCR completado. Revisá los datos en el formulario.';
-        mostrarMensaje('', 'Datos extraídos automáticamente. Verificá y corregí si es necesario.', 'info');
-    }
-    
-    document.getElementById('btnAutoOCR').addEventListener('click', async () => {
-        if(!currentFile) { alert('Primero selecciona una imagen usando el botón "OCR Profesional".'); return; }
-        await actualizarPrevisualizacion();
-        await ejecutarOCRyExtraer();
+        document.getElementById('estadoOCR').textContent = 'OCR completado. Revisá los datos extraídos.';
+        const datos = extraerDatosDeTexto(text);  // reutilizamos la misma función
+        rellenarFormulario(datos);
+        if (!datos.ruc || !datos.montoTotal) {
+            alert('No se pudieron extraer automáticamente todos los campos. Podés editar el texto OCR y presionar "Re-extraer datos".');
+        }
     });
-    document.getElementById('btnAplicarPrepro').addEventListener('click', async () => {
-        if(!currentFile) return;
-        await actualizarPrevisualizacion();
-        document.getElementById('estadoOCR').innerHTML = 'Preprocesamiento aplicado. Hacé clic en "OCR Automático" para reconocer.';
-    });
-    document.getElementById('escalaSlider').addEventListener('input', () => { document.getElementById('escalaVal').innerText = document.getElementById('escalaSlider').value; if(currentFile) actualizarPrevisualizacion(); });
-    document.getElementById('umbralSlider').addEventListener('input', () => { document.getElementById('umbralVal').innerText = document.getElementById('umbralSlider').value; if(currentFile) actualizarPrevisualizacion(); });
-    
-    document.getElementById('btnExtraerDatos').addEventListener('click', () => {
+
+    document.getElementById('btnReextraerOCR').addEventListener('click', () => {
         const texto = document.getElementById('textoOCR').value;
-        if(!texto.trim()) { alert('No hay texto en el recuadro.'); return; }
-        const d = {};
-        let ruc = texto.match(/\b(\d{6,8}-\d)\b/);
-        if(ruc) d.ruc = ruc[1];
-        let fecha = texto.match(/\b(\d{2}\/\d{2}\/\d{4})\b/);
-        if(fecha) d.fecha = fecha[1].split('/').reverse().join('-');
-        let timb = texto.match(/\b(\d{8})\b/);
-        if(timb) d.timbrado = timb[1];
-        let nro = texto.match(/\b(\d{3,4}-\d{3,4}-\d{4,10})\b/);
-        if(nro) d.numeroComprobante = nro[1];
-        let monto = texto.match(/(?:Total|TOTAL)\D*(\d{1,3}(?:\.\d{3})*,\d{2})/);
-        if(monto) d.montoTotal = parseFloat(monto[1].replace(/\./g,'').replace(',','.'));
-        if(d.ruc) {
-            let idx = texto.indexOf(d.ruc);
-            if(idx>0) {
-                let antes = texto.substring(0, idx);
-                let palabras = antes.split(/\s+/).filter(p => p.length>2 && !/^\d+$/.test(p));
-                if(palabras.length>2) d.nombre = palabras.slice(-4).join(' ');
+        if (texto.trim()) {
+            const datos = extraerDatosDeTexto(texto);
+            rellenarFormulario(datos);
+            document.getElementById('estadoOCR').textContent = 'Re-extracción completada.';
+            if (!datos.ruc || !datos.montoTotal) {
+                alert('Aún no se pudieron extraer todos los campos. Podés llenar manualmente el formulario.');
             }
+        } else {
+            alert('No hay texto OCR para procesar.');
         }
-        if(d.ruc) document.getElementById('ruc').value = d.ruc;
-        if(d.nombre) document.getElementById('nombre').value = d.nombre;
-        if(d.timbrado) document.getElementById('timbrado').value = d.timbrado;
-        if(d.numeroComprobante) document.getElementById('numeroComprobante').value = d.numeroComprobante;
-        if(d.fecha) document.getElementById('fecha').value = d.fecha;
-        if(d.montoTotal) document.getElementById('montoTotal').value = d.montoTotal;
-        resetearModoEdicion();
-        mostrarMensaje('', 'Datos extraídos del texto. Revisá el formulario.', 'info');
     });
-    document.getElementById('btnVerTextoCompleto').addEventListener('click', () => {
-        const txt = document.getElementById('textoOCR').value;
-        if(txt) alert(txt);
-        else alert('Aún no hay texto OCR.');
-    });
-    
-    const inputOcrFile = document.createElement('input');
-    inputOcrFile.type = 'file';
-    inputOcrFile.accept = 'image/*';
-    document.body.appendChild(inputOcrFile);
-    document.getElementById('btnAbrirOCR').addEventListener('click', () => inputOcrFile.click());
-    inputOcrFile.addEventListener('change', async (e) => {
-        const file = e.target.files[0];
-        if(!file) return;
-        currentFile = file;
-        const reader = new FileReader();
-        reader.onload = (ev) => { document.getElementById('imgOCR').src = ev.target.result; };
-        reader.readAsDataURL(file);
-        document.getElementById('ocrPreview').classList.remove('hidden');
-        document.getElementById('estadoOCR').innerHTML = 'Imagen cargada. Ajustá los parámetros y hacé clic en "OCR Automático".';
-        await actualizarPrevisualizacion();
-    });
-    
-    function rellenarFormulario(d) {
-        if(d.ruc) document.getElementById('ruc').value = d.ruc;
-        if(d.nombre) document.getElementById('nombre').value = d.nombre;
-        if(d.timbrado) document.getElementById('timbrado').value = d.timbrado;
-        if(d.numeroComprobante) document.getElementById('numeroComprobante').value = d.numeroComprobante;
-        if(d.fecha) {
-            let f = d.fecha;
-            if(f.includes('/')) f = f.split('/').reverse().join('-');
-            document.getElementById('fecha').value = f;
-        }
-        if(d.montoTotal) document.getElementById('montoTotal').value = d.montoTotal;
-        if(d.tipoIVA) document.getElementById('tipoIVA').value = d.tipoIVA;
-        resetearModoEdicion();
-        mostrarMensaje('', 'Datos cargados desde QR/OCR. Verificá antes de guardar.', 'info');
-    }
-    
+
     // ================== EXPORTACIÓN ZIP ==================
     document.getElementById('btnExportar').addEventListener('click', async () => {
         const incluir = document.getElementById('incluirImputadas').checked;
         const lista = incluir ? facturas : facturas.filter(f => !f.imputada);
-        if(lista.length===0){ alert('No hay facturas para exportar'); return; }
-        let miRUC = document.getElementById('miRUC').value.trim();
-        if(miRUC.includes('-')){ alert('RUC sin dígito verificador'); return; }
+        if (lista.length === 0) { alert('No hay facturas para exportar.'); return; }
+        const miRUC = document.getElementById('miRUC').value.trim();
         const periodo = document.getElementById('periodo').value.trim();
         const version = document.getElementById('versionID').value.trim();
-        if(!miRUC || !periodo || !version){ alert('Complete RUC, periodo y versión'); return; }
-        const encabezados = ['CÓDIGO TIPO DE REGISTRO','CÓDIGO TIPO DE IDENTIFICACIÓN DEL PROVEEDOR/VENDEDOR','NÚMERO DE IDENTIFICACIÓN DEL PROVEEDOR/VENDEDOR',
+        if (!miRUC || !periodo || !version) { alert('RUC, periodo y versión requeridos'); return; }
+        const encabezados = [
+            'CÓDIGO TIPO DE REGISTRO','CÓDIGO TIPO DE IDENTIFICACIÓN DEL PROVEEDOR/VENDEDOR','NÚMERO DE IDENTIFICACIÓN DEL PROVEEDOR/VENDEDOR',
             'NOMBRE O RAZÓN SOCIAL DEL PROVEEDOR/VENDEDOR','CÓDIGO TIPO DE COMPROBANTE','FECHA DE EMISIÓN DEL COMPROBANTE','NÚMERO DE TIMBRADO',
             'NÚMERO DEL COMPROBANTE','MONTO GRAVADO AL 10% (IVA INCLUIDO)','MONTO GRAVADO AL 5% (IVA INCLUIDO)','MONTO NO GRAVADO O EXENTO',
             'MONTO TOTAL DEL COMPROBANTE','CONDICIÓN DE COMPRA','OPERACIÓN EN MONEDA EXTRANJERA','IMPUTA AL IVA','IMPUTA AL IRE',
-            'IMPUTA AL IRP-RSP','NO IMPUTA','NÚMERO DEL COMPROBANTE DE VENTA ASOCIADO','TIMBRADO DEL COMPROBANTE DE VENTA ASOCIADO'];
+            'IMPUTA AL IRP-RSP','NO IMPUTA','NÚMERO DEL COMPROBANTE DE VENTA ASOCIADO','TIMBRADO DEL COMPROBANTE DE VENTA ASOCIADO'
+        ];
         const filas = [encabezados.join(',')];
-        lista.forEach(f=>{
-            const m = parseFloat(f.montoTotal)||0;
-            let m10=0,m5=0,me=0;
-            if(f.tipoIVA==='10') m10=m;
-            else if(f.tipoIVA==='5') m5=m;
-            else me=m;
+        lista.forEach(f => {
+            const m = parseFloat(f.montoTotal) || 0;
+            let m10 = 0, m5 = 0, me = 0;
+            if (f.tipoIVA === '10') m10 = m;
+            else if (f.tipoIVA === '5') m5 = m;
+            else me = m;
             const fila = [
                 document.getElementById('cfgTipoRegistro').value,
                 document.getElementById('cfgTipoIdentificacion').value,
                 f.ruc, f.nombre, f.tipoComprobante, f.fecha, f.timbrado, f.numeroComprobante,
                 m10.toFixed(2), m5.toFixed(2), me.toFixed(2), m.toFixed(2),
-                f.condicionCompra||'01', '0',
+                f.condicionCompra || '01', '0',
                 document.getElementById('cfgImputaIVA').value,
                 document.getElementById('cfgImputaIRE').value,
                 document.getElementById('cfgImputaIRP').value,
                 document.getElementById('cfgNoImputa').value,
                 '', ''
             ];
-            filas.push(fila.map(c => String(c).includes(',')||String(c).includes('"')?`"${String(c).replace(/"/g,'""')}"`:c).join(','));
+            filas.push(fila.map(c => String(c).includes(',') || String(c).includes('"') ? `"${String(c).replace(/"/g, '""')}"` : c).join(','));
         });
         const zip = new JSZip();
         zip.file(`${miRUC}_${periodo}_Compra_${version}.csv`, filas.join('\n'));
-        const blob = await zip.generateAsync({type:'blob'});
+        const blob = await zip.generateAsync({ type: 'blob' });
         saveAs(blob, `${miRUC}_${periodo}_Compra_${version}.zip`);
     });
 </script>
