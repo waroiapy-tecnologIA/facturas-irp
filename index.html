@@ -485,16 +485,31 @@
         } catch(e) { return null; }
     }
 
+    // FUNCIÓN MODIFICADA: siempre toma el PRIMER RUC que aparece (el del proveedor)
     function extraerDatosDeTexto(texto) {
         const d = {};
         const txt = texto.replace(/\s+/g, ' ').trim();
+        
+        // RUC: tomar SOLO EL PRIMERO que aparezca (el del proveedor)
         let rucMatch = txt.match(/\b(\d{6,8}\s*-\s*\d)\b/);
-        if (!rucMatch) rucMatch = txt.match(/(\d{6,8})\s*[-–]\s*(\d)/);
-        if (rucMatch) d.ruc = rucMatch[1].replace(/\s/g, '') + (rucMatch[2] ? '-' + rucMatch[2] : '');
+        if (!rucMatch) {
+            // Buscar el primer patrón de RUC incluso sin límites de palabra
+            const allRucs = txt.match(/\d{6,8}\s*[-–]\s*\d/g);
+            if (allRucs && allRucs.length > 0) {
+                rucMatch = [allRucs[0], allRucs[0]];
+            }
+        }
+        if (rucMatch) d.ruc = rucMatch[1].replace(/\s/g, '');
+        
+        // Timbrado: primer número de 8 dígitos (no RUC)
         let timbMatch = txt.match(/\b(\d{8})\b/);
         if (timbMatch) d.timbrado = timbMatch[1];
+        
+        // Número comprobante
         let nroMatch = txt.match(/\b(\d{3,4}[-]\d{3,4}[-]\d{4,10})\b/);
         if (nroMatch) d.numeroComprobante = nroMatch[1];
+        
+        // Fecha
         let fechaMatch = txt.match(/(\d{2}\/\d{2}\/\d{4})/);
         if (!fechaMatch) fechaMatch = txt.match(/(\d{4}-\d{2}-\d{2})/);
         if (fechaMatch) {
@@ -503,18 +518,25 @@
                 d.fecha = `${año}-${mes}-${día}`;
             } else d.fecha = fechaMatch[1];
         }
+        
+        // Monto total
         let montoMatch = txt.match(/(?:TOTAL|Total)\s*:?\s*(?:Gs\.?|\u20B2)?\s*([\d]{1,3}(?:[\.\s][\d]{3})*(?:[,\\.]\d{2})?)/i);
         if (!montoMatch) montoMatch = txt.match(/\b(\d{1,3}(?:[\.\s]\d{3})*[,\\.]\d{2})\b/);
         if (montoMatch) {
             let montoStr = montoMatch[1].replace(/\s/g, '').replace(/\./g, '').replace(',', '.');
             d.montoTotal = parseFloat(montoStr);
         }
+        
+        // Nombre/razón social
         let nombreMatch = txt.match(/(?:RAZON SOCIAL|NOMBRE|PROVEEDOR)[:\s]*([A-ZÁÉÍÓÚÑ\s]+?)(?=\s*(?:TIMBRADO|RUC|FECHA|TOTAL))/i);
         if (nombreMatch) d.nombre = nombreMatch[1].trim();
+        
+        // IVA
         if (txt.includes('10%') || txt.includes('10 %')) d.tipoIVA = '10';
         else if (txt.includes('5%') || txt.includes('5 %')) d.tipoIVA = '5';
         else if (txt.includes('EXENTO') || txt.includes('exento')) d.tipoIVA = '0';
         else d.tipoIVA = '10';
+        
         return d;
     }
 
@@ -531,6 +553,7 @@
                     let jsonStr = decodeBase64Safe(param);
                     if (jsonStr) {
                         let factura = JSON.parse(jsonStr);
+                        // Priorizar RUC del proveedor (el primero)
                         datos.ruc = factura.ruc_proveedor || factura.ruc || factura.RUC;
                         datos.nombre = factura.razon_social_proveedor || factura.razonSocial || factura.nombre;
                         datos.timbrado = factura.timbrado;
@@ -611,7 +634,6 @@
     document.getElementById('btnDetenerScanner').addEventListener('click', detenerScanner);
 
     // ================== OCR (dos botones diferenciados) ==================
-    // Botón "Escanear factura (OCR)" - usa cámara
     const cameraInput = document.createElement('input');
     cameraInput.type = 'file';
     cameraInput.accept = 'image/*';
@@ -619,7 +641,6 @@
     cameraInput.style.display = 'none';
     document.body.appendChild(cameraInput);
 
-    // Botón "Subir foto" - solo galería (sin capture)
     const galleryInput = document.createElement('input');
     galleryInput.type = 'file';
     galleryInput.accept = 'image/*';
@@ -658,7 +679,7 @@
     cameraInput.addEventListener('change', (e) => {
         const file = e.target.files[0];
         procesarImagen(file);
-        cameraInput.value = ''; // permitir reseleccionar el mismo archivo
+        cameraInput.value = '';
     });
 
     galleryInput.addEventListener('change', (e) => {
