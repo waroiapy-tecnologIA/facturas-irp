@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Facturas IRP - Sistema Profesional</title>
+    <title>Facturas IRP - Sistema Profesional (Corregido)</title>
     <!-- Firebase -->
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
@@ -118,7 +118,7 @@
                     <button id="btnExtraerDatos" class="btn-secondary">📌 Extraer datos a formulario</button>
                     <button id="btnVerTextoCompleto" class="btn-secondary">📄 Ver texto completo</button>
                 </div>
-                <p class="mensaje info">💡 <strong>Consejo profesional:</strong> Si la extracción automática falla, podés copiar el texto manualmente desde el recuadro y luego hacer clic en "Extraer datos".</p>
+                <p class="mensaje info">💡 <strong>Consejo:</strong> Si la extracción automática falla, corregí el texto manualmente y luego hacé clic en "Extraer datos".</p>
             </div>
         </div>
 
@@ -205,6 +205,8 @@
     let facturasListener = null;
     let scanner = null;
     let currentImageBlob = null;
+    let currentFile = null;
+    let currentPreproBlob = null;
 
     // ================== FUNCIONES UI ==================
     function mostrarPantalla(id) {
@@ -306,7 +308,7 @@
         tbody.innerHTML = '';
         facturas.forEach(f=>{
             const tipoTexto = {1:'Factura',2:'Recibo',3:'Autofactura',4:'Nota crédito',5:'Nota débito'}[f.tipoComprobante]||'';
-            tr = document.createElement('tr');
+            const tr = document.createElement('tr');
             tr.innerHTML = `<td>${f.ruc||''}</td><td>${f.nombre||''}</td><td>${tipoTexto}</td><td>${f.fecha||''}</td>
             <td>${f.numeroComprobante||''}</td><td>${(f.montoTotal||0).toLocaleString('es-PY')}</td>
             <td>${f.tipoIVA==='10'?'10%':f.tipoIVA==='5'?'5%':'Exento'}</td>
@@ -335,6 +337,7 @@
     };
     window.eliminar = async (id) => { if(confirm('Eliminar?')) await db.collection('facturas').doc(id).delete(); };
     window.toggleImp = async (id) => { const f = facturas.find(f=>f.id===id); if(f) await db.collection('facturas').doc(id).update({ imputada: !f.imputada }); };
+    
     async function guardarFactura() {
         const data = {
             ruc: document.getElementById('ruc').value.trim(),
@@ -352,13 +355,27 @@
         const docId = document.getElementById('docIdEdicion').value;
         if(docId) await db.collection('facturas').doc(docId).update(data);
         else await db.collection('facturas').add({...data, uid: usuarioActual.uid});
-        limpiarForm();
+        limpiarFormularioCompleto();
         mostrarMensaje('','Factura guardada','exito');
     }
-    function limpiarForm() { document.getElementById('formFactura').reset(); document.getElementById('docIdEdicion').value=''; document.getElementById('btnCancelarEdicion').classList.add('hidden'); document.getElementById('modoFormulario').innerText = 'Agregar'; }
+    
+    function limpiarFormularioCompleto() {
+        document.getElementById('formFactura').reset();
+        document.getElementById('docIdEdicion').value = '';
+        document.getElementById('btnCancelarEdicion').classList.add('hidden');
+        document.getElementById('modoFormulario').innerText = 'Agregar';
+    }
+    
+    function resetearModoEdicion() {
+        // Solo quita los flags de edición, NO resetea los valores del formulario
+        document.getElementById('docIdEdicion').value = '';
+        document.getElementById('btnCancelarEdicion').classList.add('hidden');
+        document.getElementById('modoFormulario').innerText = 'Agregar';
+    }
+    
     document.getElementById('btnGuardar').addEventListener('click', guardarFactura);
-    document.getElementById('btnCancelarEdicion').addEventListener('click', limpiarForm);
-    document.getElementById('btnNuevaFactura').addEventListener('click', limpiarForm);
+    document.getElementById('btnCancelarEdicion').addEventListener('click', limpiarFormularioCompleto);
+    document.getElementById('btnNuevaFactura').addEventListener('click', limpiarFormularioCompleto);
 
     // ================== QR ==================
     async function iniciarScanner() {
@@ -406,8 +423,7 @@
     document.getElementById('btnIniciarScanner').addEventListener('click', iniciarScanner);
     document.getElementById('btnDetenerScanner').addEventListener('click', detenerScanner);
 
-    // ================== OCR PROFESIONAL CON PREPROCESAMIENTO Y EXTRACCIÓN POR COORDENADAS ==================
-    // Preprocesamiento con parámetros y muestra en canvas
+    // ================== OCR PROFESIONAL (CORREGIDO) ==================
     async function preprocesarImagen(file, escala, umbral) {
         return new Promise((resolve) => {
             const img = new Image();
@@ -426,7 +442,6 @@
                     data[i]=data[i+1]=data[i+2]=val;
                 }
                 ctx.putImageData(imageData, 0, 0);
-                // Mostrar en canvas de previsualización
                 const previewCanvas = document.getElementById('canvasPrepro');
                 previewCanvas.width = canvas.width;
                 previewCanvas.height = canvas.height;
@@ -437,23 +452,18 @@
         });
     }
 
-    // Extracción avanzada: usa tanto regex global como búsqueda por coordenadas (si Tesseract devuelve palabras)
     async function extraerDatosConTesseract(blob) {
-        // Usar Tesseract con salida de palabras y bounding boxes
         const result = await Tesseract.recognize(blob, 'spa', { 
             logger: m => { if(m.status==='recognizing text') document.getElementById('estadoOCR').innerHTML = `OCR: ${Math.round(m.progress*100)}%`; },
             tessedit_pageseg_mode: 6,
             preserve_interword_spaces: 1
         });
         const text = result.data.text;
-        const words = result.data.words; // array con palabra y bounding box
+        const words = result.data.words;
         
-        // Función auxiliar para buscar un término y obtener la palabra derecha (espacial)
         function buscarValorPorEtiqueta(etiqueta, palabras, offsetX=150) {
             for(let i=0; i<palabras.length; i++) {
                 if(palabras[i].text.toUpperCase().includes(etiqueta.toUpperCase())) {
-                    // buscar palabra siguiente dentro de un rango horizontal
-                    const xCentro = palabras[i].bbox.x0 + (palabras[i].bbox.x1 - palabras[i].bbox.x0)/2;
                     for(let j=i+1; j<palabras.length; j++) {
                         if(palabras[j].bbox.x0 > palabras[i].bbox.x1 && palabras[j].bbox.x0 - palabras[i].bbox.x1 < offsetX) {
                             return palabras[j].text;
@@ -465,10 +475,8 @@
         }
         
         const d = {};
-        // 1. RUC por regex
         let rucMatch = text.match(/\b(\d{6,8}-\d)\b/);
         if(rucMatch) d.ruc = rucMatch[1];
-        // 2. RUC por búsqueda espacial de "RUC" o "R.U.C."
         if(!d.ruc) {
             let rucVal = buscarValorPorEtiqueta('RUC', words) || buscarValorPorEtiqueta('R.U.C', words);
             if(rucVal) {
@@ -476,22 +484,17 @@
                 if(match) d.ruc = match[0].replace(/(\d{6,8})(\d)/, '$1-$2');
             }
         }
-        // Fecha
         let fechaMatch = text.match(/\b(\d{2}\/\d{2}\/\d{4})\b/);
         if(fechaMatch) d.fecha = fechaMatch[1].split('/').reverse().join('-');
-        // Timbrado
         let timbMatch = text.match(/\b(\d{8})\b/);
         if(timbMatch) d.timbrado = timbMatch[1];
-        // Número comprobante
         let nroMatch = text.match(/\b(\d{3,4}-\d{3,4}-\d{4,10})\b/);
         if(nroMatch) d.numeroComprobante = nroMatch[1];
-        // Monto: buscar "Total" y número después
         let montoMatch = text.match(/(?:Total|TOTAL)\D*(\d{1,3}(?:\.\d{3})*,\d{2})/);
         if(montoMatch) {
             let m = montoMatch[1].replace(/\./g,'').replace(',','.');
             d.montoTotal = parseFloat(m);
         }
-        // Nombre: si tenemos RUC, tomar texto antes
         if(d.ruc) {
             let idx = text.indexOf(d.ruc);
             if(idx>0) {
@@ -503,11 +506,6 @@
         return { text, d };
     }
     
-    // Variables globales para la imagen actual
-    let currentFile = null;
-    let currentPreproBlob = null;
-    
-    // Actualizar vista previa del preprocesamiento sin OCR
     async function actualizarPrevisualizacion() {
         if(!currentFile) return;
         const escala = parseFloat(document.getElementById('escalaSlider').value);
@@ -516,10 +514,8 @@
         document.getElementById('umbralVal').innerText = umbral;
         const blobProc = await preprocesarImagen(currentFile, escala, umbral);
         currentPreproBlob = blobProc;
-        // No ejecutamos OCR aún, solo mostramos la imagen procesada
     }
     
-    // Ejecutar OCR completo y extraer datos
     async function ejecutarOCRyExtraer() {
         if(!currentPreproBlob) {
             if(!currentFile) { alert('Primero selecciona una imagen.'); return; }
@@ -528,19 +524,19 @@
         document.getElementById('estadoOCR').innerHTML = 'Reconociendo texto...';
         const { text, d } = await extraerDatosConTesseract(currentPreproBlob);
         document.getElementById('textoOCR').value = text;
-        // Rellenar formulario con datos extraídos
+        // Rellenar formulario sin resetear los valores (solo quitar modo edición)
         if(d.ruc) document.getElementById('ruc').value = d.ruc;
         if(d.nombre) document.getElementById('nombre').value = d.nombre;
         if(d.timbrado) document.getElementById('timbrado').value = d.timbrado;
         if(d.numeroComprobante) document.getElementById('numeroComprobante').value = d.numeroComprobante;
         if(d.fecha) document.getElementById('fecha').value = d.fecha;
         if(d.montoTotal) document.getElementById('montoTotal').value = d.montoTotal;
-        limpiarForm(); // quita modo edición
+        // Resetear solo modo edición (no los valores)
+        resetearModoEdicion();
         document.getElementById('estadoOCR').innerHTML = 'OCR completado. Revisá los datos en el formulario.';
         mostrarMensaje('', 'Datos extraídos automáticamente. Verificá y corregí si es necesario.', 'info');
     }
     
-    // Botón para aplicar preproceso y luego OCR automático
     document.getElementById('btnAutoOCR').addEventListener('click', async () => {
         if(!currentFile) { alert('Primero selecciona una imagen usando el botón "OCR Profesional".'); return; }
         await actualizarPrevisualizacion();
@@ -551,15 +547,12 @@
         await actualizarPrevisualizacion();
         document.getElementById('estadoOCR').innerHTML = 'Preprocesamiento aplicado. Hacé clic en "OCR Automático" para reconocer.';
     });
-    // Sliders en tiempo real (actualizan previsualización)
     document.getElementById('escalaSlider').addEventListener('input', () => { document.getElementById('escalaVal').innerText = document.getElementById('escalaSlider').value; if(currentFile) actualizarPrevisualizacion(); });
     document.getElementById('umbralSlider').addEventListener('input', () => { document.getElementById('umbralVal').innerText = document.getElementById('umbralSlider').value; if(currentFile) actualizarPrevisualizacion(); });
     
-    // Botón para extraer datos desde el texto editado manualmente
     document.getElementById('btnExtraerDatos').addEventListener('click', () => {
         const texto = document.getElementById('textoOCR').value;
         if(!texto.trim()) { alert('No hay texto en el recuadro.'); return; }
-        // Usar la misma función de extracción pero sin coordenadas (solo regex sobre texto plano)
         const d = {};
         let ruc = texto.match(/\b(\d{6,8}-\d)\b/);
         if(ruc) d.ruc = ruc[1];
@@ -585,7 +578,7 @@
         if(d.numeroComprobante) document.getElementById('numeroComprobante').value = d.numeroComprobante;
         if(d.fecha) document.getElementById('fecha').value = d.fecha;
         if(d.montoTotal) document.getElementById('montoTotal').value = d.montoTotal;
-        limpiarForm();
+        resetearModoEdicion();
         mostrarMensaje('', 'Datos extraídos del texto. Revisá el formulario.', 'info');
     });
     document.getElementById('btnVerTextoCompleto').addEventListener('click', () => {
@@ -594,7 +587,6 @@
         else alert('Aún no hay texto OCR.');
     });
     
-    // Manejador de selección de archivo para OCR
     const inputOcrFile = document.createElement('input');
     inputOcrFile.type = 'file';
     inputOcrFile.accept = 'image/*';
@@ -604,17 +596,14 @@
         const file = e.target.files[0];
         if(!file) return;
         currentFile = file;
-        // Mostrar imagen original
         const reader = new FileReader();
         reader.onload = (ev) => { document.getElementById('imgOCR').src = ev.target.result; };
         reader.readAsDataURL(file);
         document.getElementById('ocrPreview').classList.remove('hidden');
-        document.getElementById('estadoOCR').innerHTML = 'Imagen cargada. Ajustá los parámetros si querés y hacé clic en "OCR Automático".';
-        // Inicializar previsualización con parámetros actuales
+        document.getElementById('estadoOCR').innerHTML = 'Imagen cargada. Ajustá los parámetros y hacé clic en "OCR Automático".';
         await actualizarPrevisualizacion();
     });
     
-    // Helper para rellenar formulario (usado también por QR)
     function rellenarFormulario(d) {
         if(d.ruc) document.getElementById('ruc').value = d.ruc;
         if(d.nombre) document.getElementById('nombre').value = d.nombre;
@@ -627,7 +616,7 @@
         }
         if(d.montoTotal) document.getElementById('montoTotal').value = d.montoTotal;
         if(d.tipoIVA) document.getElementById('tipoIVA').value = d.tipoIVA;
-        limpiarForm();
+        resetearModoEdicion();
         mostrarMensaje('', 'Datos cargados desde QR/OCR. Verificá antes de guardar.', 'info');
     }
     
